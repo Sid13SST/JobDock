@@ -53,6 +53,16 @@ class JobRepositoryIT extends PostgresIntegrationTest {
     }
 
     @Test
+    void insertStoresMaxAttempts() {
+        Job custom = repository.insertIfAbsent(UUID.randomUUID(),
+                new NewJob("noop", objectMapper.createObjectNode(), null, null, 3)).orElseThrow();
+        Job defaulted = insertDue(null);
+
+        assertThat(custom.maxAttempts()).isEqualTo(3);
+        assertThat(defaulted.maxAttempts()).isEqualTo(NewJob.DEFAULT_MAX_ATTEMPTS);
+    }
+
+    @Test
     void insertWithUsedIdempotencyKeyInsertsNothing() {
         Job first = repository.insertIfAbsent(UUID.randomUUID(), newJob("k1")).orElseThrow();
 

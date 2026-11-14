@@ -106,7 +106,7 @@ class WorkerTest {
 
     private static Job running(String type) {
         Instant now = Instant.now();
-        return new Job(UUID.randomUUID(), type, JsonNodeFactory.instance.objectNode(), JobStatus.RUNNING, 1, null,
+        return new Job(UUID.randomUUID(), type, JsonNodeFactory.instance.objectNode(), JobStatus.RUNNING, 1, 5, null,
                 now, "w1", null, now, now, now, null);
     }
 }

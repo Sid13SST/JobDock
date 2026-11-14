@@ -11,6 +11,7 @@ public record Job(
         JsonNode payload,
         JobStatus status,
         int attempts,
+        int maxAttempts,
         String idempotencyKey,
         Instant runAt,
         String lockedBy,

@@ -44,12 +44,18 @@ Batch 1 (`V1__create_jobs.sql`):
 | `last_error`      | `text` NULL   | reserved for the failure path                       |
 | `created_at`, `updated_at`, `started_at`, `finished_at` | `timestamptz` |              |
 
+Batch 2 (`V2__add_max_attempts.sql`):
+
+| Column         | Type  | Notes                                                                 |
+|----------------|-------|-----------------------------------------------------------------------|
+| `max_attempts` | `int` | total attempts allowed (first run included), CHECK 1..100; default 5 |
+
 Constraint `jobs_owner_iff_running`: `locked_by` is set if and only if `status = 'RUNNING'`.
 
 Index: partial index on `(run_at, created_at)` `WHERE status IN ('QUEUED','FAILED_RETRY')`
 so the claim query only scans claimable rows.
 
-Planned (later migrations): `max_attempts int`, `locked_until timestamptz`
+Planned (later migrations): `locked_until timestamptz`
 (lease expiry), `heartbeat_at timestamptz`.
 
 ## 3. Enqueue and idempotency [B1]
@@ -70,6 +76,7 @@ RETURNING ...
 - Concurrent requests with the same key: Postgres' unique index makes the second
   insert wait for the first transaction and then do nothing, so exactly one row is
   created. This is covered by an integration test.
+- `runAt` and `maxAttempts` are not part of the replay comparison.
 - Keys never expire in the current design (simple and honest; a TTL would be a later choice).
 
 ## 4. Claim protocol [B1]

@@ -16,7 +16,8 @@ public class JobService {
     /**
      * Enqueues a job. With an idempotency key, a repeated request with the same type and payload
      * returns the original job instead of creating a new one; a repeated key with a different
-     * type or payload is rejected. {@code runAt} is not part of the comparison.
+     * type or payload is rejected. {@code runAt} and {@code maxAttempts} are not part of the
+     * comparison.
      */
     public EnqueueResult enqueue(NewJob newJob) {
         Optional<Job> inserted = repository.insertIfAbsent(UUID.randomUUID(), newJob);

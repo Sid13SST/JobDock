@@ -12,6 +12,7 @@ public record JobResponse(
         JsonNode payload,
         JobStatus status,
         int attempts,
+        int maxAttempts,
         String idempotencyKey,
         Instant runAt,
         String lockedBy,
@@ -22,7 +23,7 @@ public record JobResponse(
         Instant finishedAt) {
 
     static JobResponse from(Job job) {
-        return new JobResponse(job.id(), job.type(), job.payload(), job.status(), job.attempts(),
+        return new JobResponse(job.id(), job.type(), job.payload(), job.status(), job.attempts(), job.maxAttempts(),
                 job.idempotencyKey(), job.runAt(), job.lockedBy(), job.lastError(), job.createdAt(),
                 job.updatedAt(), job.startedAt(), job.finishedAt());
     }

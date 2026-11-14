@@ -1,6 +1,9 @@
 package com.jobdock.api;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -15,10 +18,12 @@ import com.jobdock.job.IdempotencyConflictException;
 import com.jobdock.job.Job;
 import com.jobdock.job.JobService;
 import com.jobdock.job.JobStatus;
+import com.jobdock.job.NewJob;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.http.MediaType;
@@ -90,6 +95,27 @@ class JobControllerTest {
     }
 
     @Test
+    void maxAttemptsOutOfRangeReturns400() throws Exception {
+        mvc.perform(postJob("{\"type\":\"email\",\"payload\":{},\"maxAttempts\":0}"))
+                .andExpect(status().isBadRequest());
+        mvc.perform(postJob("{\"type\":\"email\",\"payload\":{},\"maxAttempts\":101}"))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(service);
+    }
+
+    @Test
+    void maxAttemptsIsPassedThroughOrDefaulted() throws Exception {
+        when(service.enqueue(any())).thenReturn(new EnqueueResult.Created(job()));
+
+        mvc.perform(postJob("{\"type\":\"email\",\"payload\":{},\"maxAttempts\":3}")).andExpect(status().isCreated());
+        mvc.perform(postJob("{\"type\":\"email\",\"payload\":{}}")).andExpect(status().isCreated());
+
+        ArgumentCaptor<NewJob> captor = ArgumentCaptor.forClass(NewJob.class);
+        verify(service, times(2)).enqueue(captor.capture());
+        assertThat(captor.getAllValues()).extracting(NewJob::maxAttempts).containsExactly(3, NewJob.DEFAULT_MAX_ATTEMPTS);
+    }
+
+    @Test
     void malformedJsonReturns400() throws Exception {
         mvc.perform(postJob("{not json")).andExpect(status().isBadRequest());
         verifyNoInteractions(service);
@@ -121,7 +147,7 @@ class JobControllerTest {
 
     private Job job() {
         Instant now = Instant.now();
-        return new Job(UUID.randomUUID(), "email", om.createObjectNode(), JobStatus.QUEUED, 0, null, now, null,
+        return new Job(UUID.randomUUID(), "email", om.createObjectNode(), JobStatus.QUEUED, 0, 5, null, now, null,
                 null, now, now, null, null);
     }
 }

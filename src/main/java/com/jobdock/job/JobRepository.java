@@ -24,7 +24,7 @@ import org.springframework.stereotype.Repository;
 public class JobRepository {
 
     private static final String COLUMNS = """
-            id, type, payload, status, attempts, idempotency_key, run_at, locked_by,
+            id, type, payload, status, attempts, max_attempts, idempotency_key, run_at, locked_by,
             last_error, created_at, updated_at, started_at, finished_at""";
 
     /** {@link #COLUMNS} qualified with alias {@code j}, for UPDATE ... FROM ... RETURNING. */
@@ -47,14 +47,16 @@ public class JobRepository {
      */
     public Optional<Job> insertIfAbsent(UUID id, NewJob job) {
         return jdbc.sql("""
-                        INSERT INTO jobs (id, type, payload, status, idempotency_key, run_at)
-                        VALUES (:id, :type, CAST(:payload AS jsonb), 'QUEUED', :key, COALESCE(:runAt, now()))
+                        INSERT INTO jobs (id, type, payload, status, idempotency_key, run_at, max_attempts)
+                        VALUES (:id, :type, CAST(:payload AS jsonb), 'QUEUED', :key, COALESCE(:runAt, now()),
+                                :maxAttempts)
                         ON CONFLICT (idempotency_key) DO NOTHING
                         RETURNING\s""" + COLUMNS)
                 .param("id", id)
                 .param("type", job.type())
                 .param("payload", toJson(job))
                 .param("key", job.idempotencyKey())
+                .param("maxAttempts", job.maxAttempts())
                 .param("runAt", job.runAt() == null ? null : Timestamp.from(job.runAt()))
                 .query(this::mapRow)
                 .optional();
@@ -139,6 +141,7 @@ public class JobRepository {
                     objectMapper.readTree(rs.getString("payload")),
                     JobStatus.valueOf(rs.getString("status")),
                     rs.getInt("attempts"),
+                    rs.getInt("max_attempts"),
                     rs.getString("idempotency_key"),
                     instant(rs, "run_at"),
                     rs.getString("locked_by"),

@@ -65,7 +65,7 @@ class JobServiceTest {
 
     private static Job job(String type, JsonNode payload, String key) {
         Instant now = Instant.now();
-        return new Job(UUID.randomUUID(), type, payload, JobStatus.QUEUED, 0, key, now, null, null, now, now,
+        return new Job(UUID.randomUUID(), type, payload, JobStatus.QUEUED, 0, 5, key, now, null, null, now, now,
                 null, null);
     }
 }

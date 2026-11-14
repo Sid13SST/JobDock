@@ -40,9 +40,10 @@ curl -i -X POST localhost:8080/jobs \
 | `201 Created` + `Location` | new job |
 | `200 OK` + `Idempotent-Replayed: true` | same `Idempotency-Key`, same `type` and `payload`: original job returned, nothing created |
 | `409 Conflict` | same key reused with a different `type` or `payload` |
-| `400 Bad Request` | missing/blank `type` (max 100 chars), `payload` not a JSON object, key longer than 255 chars |
+| `400 Bad Request` | missing/blank `type` (max 100 chars), `payload` not a JSON object, key longer than 255 chars, `maxAttempts` outside 1–100 |
 
-Optional body field `runAt` (ISO-8601) delays the job. `GET /jobs/{id}` returns the job or `404`.
+Optional body fields: `runAt` (ISO-8601) delays the job; `maxAttempts` (1–100,
+default 5) is the total number of attempts before the job is dead-lettered. `GET /jobs/{id}` returns the job or `404`.
 
 ## Workers
 

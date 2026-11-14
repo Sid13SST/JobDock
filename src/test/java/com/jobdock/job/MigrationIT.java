@@ -11,10 +11,10 @@ import org.springframework.dao.DataIntegrityViolationException;
 class MigrationIT extends PostgresIntegrationTest {
 
     @Test
-    void v1IsApplied() {
+    void allMigrationsAreApplied() {
         String version = jdbc.sql("SELECT max(version) FROM flyway_schema_history WHERE success")
                 .query(String.class).single();
-        assertThat(version).isEqualTo("1");
+        assertThat(version).isEqualTo("2");
     }
 
     @Test
@@ -24,6 +24,18 @@ class MigrationIT extends PostgresIntegrationTest {
                 .param(id).update();
         Integer attempts = jdbc.sql("SELECT attempts FROM jobs WHERE id = ?").param(id).query(Integer.class).single();
         assertThat(attempts).isZero();
+    }
+
+    @Test
+    void maxAttemptsDefaultsToFiveForBackfillAndIsRangeChecked() {
+        UUID id = UUID.randomUUID();
+        insert(id, "QUEUED", null, null);
+        assertThat(jdbc.sql("SELECT max_attempts FROM jobs WHERE id = ?").param(id).query(Integer.class).single())
+                .isEqualTo(5);
+        assertThatThrownBy(() -> jdbc.sql("UPDATE jobs SET max_attempts = 0 WHERE id = ?").param(id).update())
+                .isInstanceOf(DataIntegrityViolationException.class);
+        assertThatThrownBy(() -> jdbc.sql("UPDATE jobs SET max_attempts = 101 WHERE id = ?").param(id).update())
+                .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test

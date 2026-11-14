@@ -39,7 +39,8 @@ public class JobController {
             @RequestHeader(name = IDEMPOTENCY_KEY, required = false) @Size(min = 1, max = 255) String idempotencyKey,
             @Valid @RequestBody EnqueueRequest request) {
         EnqueueResult result = service.enqueue(
-                new NewJob(request.type(), request.payload(), idempotencyKey, request.runAt()));
+                new NewJob(request.type(), request.payload(), idempotencyKey, request.runAt(),
+                        request.maxAttempts() == null ? NewJob.DEFAULT_MAX_ATTEMPTS : request.maxAttempts()));
         JobResponse body = JobResponse.from(result.job());
         return switch (result) {
             case EnqueueResult.Created created ->

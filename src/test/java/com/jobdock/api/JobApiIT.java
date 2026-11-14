@@ -43,6 +43,15 @@ class JobApiIT extends PostgresIntegrationTest {
         assertThat(fetched.getBody().get("status").asText()).isEqualTo("QUEUED");
         assertThat(fetched.getBody().get("payload").get("to").asText()).isEqualTo("a@example.com");
         assertThat(fetched.getBody().get("attempts").asInt()).isZero();
+        assertThat(fetched.getBody().get("maxAttempts").asInt()).isEqualTo(5);
+    }
+
+    @Test
+    void maxAttemptsIsStored() {
+        ResponseEntity<JsonNode> created = post(null, "{\"type\":\"email\",\"payload\":{},\"maxAttempts\":2}");
+
+        assertThat(created.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        assertThat(created.getBody().get("maxAttempts").asInt()).isEqualTo(2);
     }
 
     @Test
