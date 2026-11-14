@@ -19,7 +19,8 @@ import org.springframework.stereotype.Repository;
 
 /**
  * All SQL for the jobs table. Every state transition is one statement guarded by the
- * expected current state, so concurrent callers cannot both succeed.
+ * expected current state, so concurrent callers cannot both succeed. Transitions out of
+ * RUNNING are additionally fenced by (owner, attempt): only the current claim may complete it.
  */
 @Repository
 public class JobRepository {
@@ -121,16 +122,18 @@ public class JobRepository {
     }
 
     /**
-     * Marks a RUNNING job owned by {@code workerId} as SUCCEEDED.
+     * Marks a RUNNING job as SUCCEEDED, fenced by owner and attempt: it only applies if
+     * {@code workerId} still holds the claim made for {@code attempt}. A worker whose lease was
+     * reclaimed (even if it got the job again later under the same id) cannot record a result.
      *
-     * @return false if the job is not RUNNING or not owned by this worker (nothing changed)
+     * @return false if that claim is no longer current (nothing changed)
      */
-    public boolean markSucceeded(UUID id, String workerId) {
+    public boolean markSucceeded(UUID id, String workerId, int attempt) {
         int updated = jdbc.sql("""
                         UPDATE jobs
                         SET status = 'SUCCEEDED', locked_by = NULL, locked_until = NULL, finished_at = now(), updated_at = now()
-                        WHERE id = ? AND status = 'RUNNING' AND locked_by = ?""")
-                .params(id, workerId)
+                        WHERE id = ? AND status = 'RUNNING' AND locked_by = ? AND attempts = ?""")
+                .params(id, workerId, attempt)
                 .update();
         return updated == 1;
     }
@@ -139,11 +142,13 @@ public class JobRepository {
      * Records a failed attempt of a RUNNING job owned by {@code workerId}, in one statement:
      * if the job has used all its attempts ({@code attempts >= max_attempts}) it becomes DEAD,
      * otherwise FAILED_RETRY with {@code run_at = now() + retryDelay} (database clock). The owner
-     * is released and {@code error} stored in {@code last_error} in both cases.
+     * is released and {@code error} stored in {@code last_error} in both cases. Fenced by owner
+     * and attempt like {@link #markSucceeded}.
      *
-     * @return empty if the job is not RUNNING or not owned by this worker (nothing changed)
+     * @return empty if the claim of {@code workerId} for {@code attempt} is no longer current
      */
-    public Optional<FailureOutcome> markFailed(UUID id, String workerId, String error, Duration retryDelay) {
+    public Optional<FailureOutcome> markFailed(UUID id, String workerId, int attempt, String error,
+            Duration retryDelay) {
         if (retryDelay.isNegative()) {
             throw new IllegalArgumentException("retryDelay must not be negative");
         }
@@ -157,12 +162,13 @@ public class JobRepository {
                             locked_until = NULL,
                             last_error  = :error,
                             updated_at  = now()
-                        WHERE id = :id AND status = 'RUNNING' AND locked_by = :worker
+                        WHERE id = :id AND status = 'RUNNING' AND locked_by = :worker AND attempts = :attempt
                         RETURNING status, run_at""")
                 .param("delayMillis", retryDelay.toMillis())
                 .param("error", truncate(error))
                 .param("id", id)
                 .param("worker", workerId)
+                .param("attempt", attempt)
                 .query((rs, n) -> new FailureOutcome(JobStatus.valueOf(rs.getString("status")), instant(rs, "run_at")))
                 .optional();
     }

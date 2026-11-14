@@ -65,14 +65,14 @@ public class Worker {
             fail(job, describe(e), e);
             return;
         }
-        if (!repository.markSucceeded(job.id(), id)) {
+        if (!repository.markSucceeded(job.id(), id, job.attempts())) {
             log.warn("Job {} finished but worker {} no longer owns it; success not recorded", job.id(), id);
         }
     }
 
     private void fail(Job job, String error, Exception cause) {
         Duration delay = backoff.delay(job.attempts());
-        Optional<FailureOutcome> outcome = repository.markFailed(job.id(), id, error, delay);
+        Optional<FailureOutcome> outcome = repository.markFailed(job.id(), id, job.attempts(), error, delay);
         if (outcome.isEmpty()) {
             log.warn("Job {} failed but worker {} no longer owns it; failure not recorded", job.id(), id);
         } else if (outcome.get().status() == JobStatus.DEAD) {

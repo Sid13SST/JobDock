@@ -48,14 +48,14 @@ class WorkerTest {
         Job b = running("email", 1);
         Worker worker = worker(10, recording("email"));
         when(repository.claim(any(), any(), anyInt(), any())).thenReturn(List.of(a, b));
-        when(repository.markSucceeded(any(), eq("w1"))).thenReturn(true);
+        when(repository.markSucceeded(any(), eq("w1"), anyInt())).thenReturn(true);
 
         assertThat(worker.pollOnce()).isEqualTo(2);
 
         assertThat(handled).containsExactly(a.id(), b.id());
-        verify(repository).markSucceeded(a.id(), "w1");
-        verify(repository).markSucceeded(b.id(), "w1");
-        verify(repository, never()).markFailed(any(), any(), any(), any());
+        verify(repository).markSucceeded(a.id(), "w1", 1);
+        verify(repository).markSucceeded(b.id(), "w1", 1);
+        verify(repository, never()).markFailed(any(), any(), anyInt(), any(), any());
     }
 
     @Test
@@ -64,17 +64,17 @@ class WorkerTest {
         Job good = running("email", 1);
         Worker worker = worker(10, failing("boom", new IllegalStateException("disk full")), recording("email"));
         when(repository.claim(any(), any(), anyInt(), any())).thenReturn(List.of(bad, good));
-        when(repository.markSucceeded(any(), any())).thenReturn(true);
-        when(repository.markFailed(any(), any(), any(), any()))
+        when(repository.markSucceeded(any(), any(), anyInt())).thenReturn(true);
+        when(repository.markFailed(any(), any(), anyInt(), any(), any()))
                 .thenReturn(Optional.of(new FailureOutcome(JobStatus.FAILED_RETRY, Instant.now())));
 
         assertThat(worker.pollOnce()).isEqualTo(2);
 
         // attempt 3 -> 0.5 * 1s * 2^2 = 2s
-        verify(repository).markFailed(bad.id(), "w1", "java.lang.IllegalStateException: disk full",
+        verify(repository).markFailed(bad.id(), "w1", 3, "java.lang.IllegalStateException: disk full",
                 Duration.ofSeconds(2));
-        verify(repository, never()).markSucceeded(eq(bad.id()), any());
-        verify(repository).markSucceeded(good.id(), "w1");
+        verify(repository, never()).markSucceeded(eq(bad.id()), any(), anyInt());
+        verify(repository).markSucceeded(good.id(), "w1", 1);
     }
 
     @Test
@@ -83,14 +83,14 @@ class WorkerTest {
         Job b = running("boom", 1);
         Worker worker = worker(10, failing("boom", new RuntimeException()));
         when(repository.claim(any(), any(), anyInt(), any())).thenReturn(List.of(a, b));
-        when(repository.markFailed(eq(a.id()), any(), any(), any()))
+        when(repository.markFailed(eq(a.id()), any(), anyInt(), any(), any()))
                 .thenReturn(Optional.of(new FailureOutcome(JobStatus.DEAD, Instant.now())));
-        when(repository.markFailed(eq(b.id()), any(), any(), any())).thenReturn(Optional.empty());
+        when(repository.markFailed(eq(b.id()), any(), anyInt(), any(), any())).thenReturn(Optional.empty());
 
         assertThat(worker.pollOnce()).isEqualTo(2);
 
-        verify(repository).markFailed(a.id(), "w1", "java.lang.RuntimeException", Duration.ofSeconds(8));
-        verify(repository).markFailed(b.id(), "w1", "java.lang.RuntimeException", Duration.ofMillis(500));
+        verify(repository).markFailed(a.id(), "w1", 5, "java.lang.RuntimeException", Duration.ofSeconds(8));
+        verify(repository).markFailed(b.id(), "w1", 1, "java.lang.RuntimeException", Duration.ofMillis(500));
     }
 
     @Test
@@ -98,11 +98,11 @@ class WorkerTest {
         Job orphan = running("unknown", 1);
         Worker worker = worker(10, recording("email"));
         when(repository.claim(any(), any(), anyInt(), any())).thenReturn(List.of(orphan));
-        when(repository.markFailed(any(), any(), any(), any())).thenReturn(Optional.empty());
+        when(repository.markFailed(any(), any(), anyInt(), any(), any())).thenReturn(Optional.empty());
 
         worker.pollOnce();
 
-        verify(repository).markFailed(orphan.id(), "w1", "No handler registered for type 'unknown'",
+        verify(repository).markFailed(orphan.id(), "w1", 1, "No handler registered for type 'unknown'",
                 Duration.ofMillis(500));
     }
 
@@ -111,7 +111,7 @@ class WorkerTest {
         Job job = running("email", 1);
         Worker worker = worker(10, recording("email"));
         when(repository.claim(any(), any(), anyInt(), any())).thenReturn(List.of(job));
-        when(repository.markSucceeded(job.id(), "w1")).thenReturn(false);
+        when(repository.markSucceeded(job.id(), "w1", 1)).thenReturn(false);
 
         assertThat(worker.pollOnce()).isEqualTo(1);
         assertThat(handled).containsExactly(job.id());

@@ -25,7 +25,7 @@ class JobFailureIT extends PostgresIntegrationTest {
     void failureBelowMaxAttemptsSchedulesRetryAtDatabaseNowPlusDelay() {
         Job job = claimNew(3);
 
-        Optional<FailureOutcome> outcome = repository.markFailed(job.id(), "w1", "boom", Duration.ofMillis(2_500));
+        Optional<FailureOutcome> outcome = repository.markFailed(job.id(), "w1", job.attempts(), "boom", Duration.ofMillis(2_500));
 
         assertThat(outcome).map(FailureOutcome::status).contains(JobStatus.FAILED_RETRY);
         Job failed = reload(job);
@@ -44,7 +44,7 @@ class JobFailureIT extends PostgresIntegrationTest {
     void failureOnLastAttemptDeadLettersAndKeepsLastError() {
         Job job = claimNew(1);
 
-        Optional<FailureOutcome> outcome = repository.markFailed(job.id(), "w1", "fatal", Duration.ofSeconds(10));
+        Optional<FailureOutcome> outcome = repository.markFailed(job.id(), "w1", job.attempts(), "fatal", Duration.ofSeconds(10));
 
         assertThat(outcome).map(FailureOutcome::status).contains(JobStatus.DEAD);
         Job dead = reload(job);
@@ -60,18 +60,18 @@ class JobFailureIT extends PostgresIntegrationTest {
     void failureByNonOwnerOrOnNonRunningJobChangesNothing() {
         Job job = claimNew(3);
 
-        assertThat(repository.markFailed(job.id(), "someone-else", "x", Duration.ZERO)).isEmpty();
+        assertThat(repository.markFailed(job.id(), "someone-else", job.attempts(), "x", Duration.ZERO)).isEmpty();
         assertThat(reload(job).status()).isEqualTo(JobStatus.RUNNING);
 
-        assertThat(repository.markSucceeded(job.id(), "w1")).isTrue();
-        assertThat(repository.markFailed(job.id(), "w1", "x", Duration.ZERO)).isEmpty();
+        assertThat(repository.markSucceeded(job.id(), "w1", job.attempts())).isTrue();
+        assertThat(repository.markFailed(job.id(), "w1", job.attempts(), "x", Duration.ZERO)).isEmpty();
         assertThat(reload(job).status()).isEqualTo(JobStatus.SUCCEEDED);
     }
 
     @Test
     void retryIsNotClaimedBeforeRunAtButIsAfterwards() {
         Job job = claimNew(3);
-        repository.markFailed(job.id(), "w1", "boom", Duration.ofHours(1));
+        repository.markFailed(job.id(), "w1", job.attempts(), "boom", Duration.ofHours(1));
 
         assertThat(repository.claim("w2", NOOP, 10, LEASE)).isEmpty();
 
@@ -89,7 +89,7 @@ class JobFailureIT extends PostgresIntegrationTest {
     @Test
     void deadJobIsNeverClaimedAgain() {
         Job job = claimNew(1);
-        repository.markFailed(job.id(), "w1", "fatal", Duration.ZERO);
+        repository.markFailed(job.id(), "w1", job.attempts(), "fatal", Duration.ZERO);
         makeDue(job);
 
         assertThat(repository.claim("w2", NOOP, 10, LEASE)).isEmpty();
@@ -99,7 +99,7 @@ class JobFailureIT extends PostgresIntegrationTest {
     void longErrorIsTruncated() {
         Job job = claimNew(3);
 
-        repository.markFailed(job.id(), "w1", "e".repeat(JobRepository.MAX_ERROR_LENGTH + 500), Duration.ZERO);
+        repository.markFailed(job.id(), "w1", job.attempts(), "e".repeat(JobRepository.MAX_ERROR_LENGTH + 500), Duration.ZERO);
 
         assertThat(reload(job).lastError()).hasSize(JobRepository.MAX_ERROR_LENGTH);
     }

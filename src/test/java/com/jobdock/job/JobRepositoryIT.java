@@ -203,24 +203,24 @@ class JobRepositoryIT extends PostgresIntegrationTest {
         insertDue(null);
         Job job = repository.claim("worker-1", NOOP, 1, LEASE).getFirst();
 
-        assertThat(repository.markSucceeded(job.id(), "worker-2")).isFalse();
+        assertThat(repository.markSucceeded(job.id(), "worker-2", job.attempts())).isFalse();
         assertThat(repository.findById(job.id()).orElseThrow().status()).isEqualTo(JobStatus.RUNNING);
 
-        assertThat(repository.markSucceeded(job.id(), "worker-1")).isTrue();
+        assertThat(repository.markSucceeded(job.id(), "worker-1", job.attempts())).isTrue();
         Job done = repository.findById(job.id()).orElseThrow();
         assertThat(done.status()).isEqualTo(JobStatus.SUCCEEDED);
         assertThat(done.lockedBy()).isNull();
         assertThat(done.lockedUntil()).isNull();
         assertThat(done.finishedAt()).isNotNull();
 
-        assertThat(repository.markSucceeded(job.id(), "worker-1")).isFalse();
+        assertThat(repository.markSucceeded(job.id(), "worker-1", job.attempts())).isFalse();
     }
 
     @Test
     void markSucceededOnQueuedJobDoesNothing() {
         Job job = insertDue(null);
 
-        assertThat(repository.markSucceeded(job.id(), "worker-1")).isFalse();
+        assertThat(repository.markSucceeded(job.id(), "worker-1", job.attempts())).isFalse();
         assertThat(repository.findById(job.id()).orElseThrow().status()).isEqualTo(JobStatus.QUEUED);
     }
 

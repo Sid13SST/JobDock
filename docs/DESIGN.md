@@ -119,12 +119,16 @@ RETURNING j.*;
 Completion:
 
 ```sql
-UPDATE jobs SET status='SUCCEEDED', locked_by=NULL, finished_at=now(), updated_at=now()
-WHERE id = :id AND status = 'RUNNING' AND locked_by = :worker
+UPDATE jobs SET status='SUCCEEDED', locked_by=NULL, locked_until=NULL, finished_at=now(), updated_at=now()
+WHERE id = :id AND status = 'RUNNING' AND locked_by = :worker AND attempts = :attempt
 ```
 
-0 rows updated means the worker no longer owns the job (meaningful once lease
-recovery exists); it is logged and not treated as success.
+**Fencing [B3]:** every transition out of `RUNNING` (success, failure, heartbeat)
+names the claim it belongs to: `(locked_by, attempts)`. `attempts` is
+incremented by every claim, so it works as a fencing token: once a job has been
+reclaimed, the previous claim's updates match 0 rows — even if the same worker
+id got the job back for a later attempt. 0 rows is logged and never treated as
+success.
 
 The handler runs between claim and completion with no transaction open.
 

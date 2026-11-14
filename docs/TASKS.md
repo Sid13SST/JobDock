@@ -29,7 +29,7 @@ backoff without cap / without jitter -> `BackoffPolicyTest`.
 
 ## Batch 3 — leases and crash recovery
 - [x] 3.1 Migration `V3`: `locked_until`; claim sets lease `now() + lease-duration` + tests
-- [ ] 3.2 Fencing: success/failure updates apply only if owner **and** attempt still match + ITs
+- [x] 3.2 Fencing: success/failure updates apply only if owner **and** attempt still match + ITs
 - [ ] 3.3 Heartbeat thread extends leases of held jobs; lease-lost detection + ITs
 - [ ] 3.4 Reaper (safe with concurrent reapers): expired lease -> `FAILED_RETRY` / `DEAD`; zombie and concurrent-reaper ITs
 - [ ] 3.5 Worker robustness: any `Throwable` from a handler is a failure; a failed result write does not strand the rest of the batch
