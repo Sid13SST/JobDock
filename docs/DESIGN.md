@@ -60,6 +60,9 @@ Index `jobs_running_lease_idx` on `(locked_until) WHERE status = 'RUNNING'` for 
 Rows that were `RUNNING` when V3 ran get `locked_until = now()` (already expired), so
 they are recovered.
 
+Batch 4 (`V4__add_lease_expirations.sql`): `lease_expirations int` — how many
+times the reaper took this job back; summed by `/metrics`.
+
 Constraint `jobs_owner_iff_running`: `locked_by` is set if and only if `status = 'RUNNING'`.
 
 Index: partial index on `(run_at, created_at)` `WHERE status IN ('QUEUED','FAILED_RETRY')`
@@ -233,6 +236,22 @@ delay(n) = min(base * 2^(n-1), max_delay) * (0.5 + 0.5 r),   r uniform in [0, 1)
   That job is no longer heartbeated, so its lease expires and the reaper requeues
   it; the handler runs again. On an interrupt (shutdown timeout) the worker stops
   starting further jobs of its batch; those leases expire the same way.
+
+## 6a. Metrics [B4]
+
+`GET /metrics` returns one aggregate query over `jobs` (so every instance reports
+the same numbers and they survive restarts):
+
+| Field | Definition |
+|-------|------------|
+| `countsByStatus` | jobs per state, all five states always present |
+| `oldestDueAgeSeconds` | `now() - min(run_at)` over claimable jobs (`QUEUED`/`FAILED_RETRY` with `run_at <= now()`); `null` if none. Measures backlog lag, not age since enqueue, so jobs scheduled for later do not count |
+| `retriesTotal` | `sum(attempts - 1)`: re-attempts after failures plus re-runs after lease expiry |
+| `deadLettered` | jobs in `DEAD` |
+| `leaseExpirationsTotal` | `sum(lease_expirations)`: times the reaper recovered a job |
+
+Trade-off: it is a full-table aggregate. Fine at portfolio scale; a large table
+would need rolled-up counters or a Micrometer/Prometheus exporter instead.
 
 ## 7. Delivery semantics (honest statement)
 

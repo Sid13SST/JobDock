@@ -10,6 +10,7 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -237,6 +238,7 @@ public class JobRepository {
                             finished_at  = CASE WHEN j.attempts >= j.max_attempts THEN now() END,
                             last_error   = 'Lease expired: worker ' || expired.locked_by
                                            || ' stopped heartbeating during attempt ' || j.attempts,
+                            lease_expirations = j.lease_expirations + 1,
                             locked_by    = NULL,
                             locked_until = NULL,
                             updated_at   = now()
@@ -247,6 +249,37 @@ public class JobRepository {
                 .query((rs, n) -> new ReapedJob(rs.getObject("id", UUID.class), JobStatus.valueOf(rs.getString("status")),
                         rs.getString("previous_owner"), rs.getInt("attempts")))
                 .list();
+    }
+
+    /**
+     * Queue statistics in one aggregate query. This scans the whole table, which is fine for this
+     * project's scale; a large deployment would keep rolled-up counters instead.
+     */
+    public QueueStats stats() {
+        return jdbc.sql("""
+                        SELECT count(*) FILTER (WHERE status = 'QUEUED')       AS queued,
+                               count(*) FILTER (WHERE status = 'RUNNING')      AS running,
+                               count(*) FILTER (WHERE status = 'SUCCEEDED')    AS succeeded,
+                               count(*) FILTER (WHERE status = 'FAILED_RETRY') AS failed_retry,
+                               count(*) FILTER (WHERE status = 'DEAD')         AS dead,
+                               COALESCE(sum(GREATEST(attempts - 1, 0)), 0)     AS retries,
+                               COALESCE(sum(lease_expirations), 0)             AS lease_expirations,
+                               EXTRACT(EPOCH FROM now() - min(run_at) FILTER (
+                                   WHERE status IN ('QUEUED', 'FAILED_RETRY') AND run_at <= now()))
+                                                                              AS oldest_due_seconds
+                        FROM jobs""")
+                .query((rs, n) -> {
+                    Map<JobStatus, Long> counts = new EnumMap<>(JobStatus.class);
+                    counts.put(JobStatus.QUEUED, rs.getLong("queued"));
+                    counts.put(JobStatus.RUNNING, rs.getLong("running"));
+                    counts.put(JobStatus.SUCCEEDED, rs.getLong("succeeded"));
+                    counts.put(JobStatus.FAILED_RETRY, rs.getLong("failed_retry"));
+                    counts.put(JobStatus.DEAD, rs.getLong("dead"));
+                    double oldest = rs.getDouble("oldest_due_seconds");
+                    return new QueueStats(counts, rs.wasNull() ? null : oldest, rs.getLong("retries"),
+                            counts.get(JobStatus.DEAD), rs.getLong("lease_expirations"));
+                })
+                .single();
     }
 
     private static String truncate(String error) {

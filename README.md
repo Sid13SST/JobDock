@@ -42,6 +42,10 @@ curl -i -X POST localhost:8080/jobs \
 | `409 Conflict` | same key reused with a different `type` or `payload` |
 | `400 Bad Request` | missing/blank `type` (max 100 chars), `payload` not a JSON object, key longer than 255 chars, `maxAttempts` outside 1–100 |
 
+`GET /metrics` — job counts per state, how long the oldest due job has waited,
+total retries, dead-lettered jobs and lease expirations (definitions:
+docs/DESIGN.md section 6a).
+
 Optional body fields: `runAt` (ISO-8601) delays the job; `maxAttempts` (1–100,
 default 5) is the total number of attempts before the job is dead-lettered. `GET /jobs/{id}` returns the job or `404`.
 

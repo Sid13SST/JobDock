@@ -47,7 +47,8 @@ reaper never reaping -> `CrashRecoveryIT`;
 handler `Error`s not caught -> `WorkerTest`;
 result-write failure aborting the batch -> `WorkerTest`, `ResultWriteFailureIT`.
 
-## Batch 4 — ops (planned)
-- [ ] 4.1 Metrics endpoint (counts per state, oldest queued age) via Actuator/Micrometer
-- [ ] 4.2 Dockerfile + `compose.yaml` (app + Postgres), verified with `docker compose up`
-- [ ] 4.3 Poll loop resilience when the DB is unavailable
+## Batch 4 — ops, demo, README
+- [x] 4.1 `GET /metrics` (counts per state, oldest due age, retries, dead-lettered, lease expirations; `V4` adds `lease_expirations`) + IT
+- [ ] 4.2 Sample handler + Dockerfile + `docker-compose.yml` (api, workers, Postgres 16; pinned tags, healthchecks) + crash demo script, actually run
+- [ ] 4.3 Verify the app starts standalone (`java -jar`) against a real Postgres
+- [ ] 4.4 README for interviews: problem, architecture, guarantees, how to run, trade-offs, next steps

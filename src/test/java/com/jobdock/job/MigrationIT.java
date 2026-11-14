@@ -14,7 +14,7 @@ class MigrationIT extends PostgresIntegrationTest {
     void allMigrationsAreApplied() {
         String version = jdbc.sql("SELECT max(version) FROM flyway_schema_history WHERE success")
                 .query(String.class).single();
-        assertThat(version).isEqualTo("3");
+        assertThat(version).isEqualTo("4");
     }
 
     @Test
