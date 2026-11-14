@@ -14,10 +14,12 @@ Each task = one reviewable commit with its own tests. `./mvnw verify` must pass.
 - [x] 1.6 Concurrency IT: N workers x M jobs, each executed exactly once on the success path, none lost
 - [x] 1.7 GitHub Actions CI running `./mvnw verify`
 
-## Batch 2 — failure handling (planned)
-- [ ] 2.1 Migration: `max_attempts`; handler failure -> `FAILED_RETRY` with exponential backoff + jitter
-- [ ] 2.2 `DEAD` after `max_attempts`
-- [ ] 2.3 Claim also picks `FAILED_RETRY` rows whose `run_at` has passed
+## Batch 2 — failure handling
+- [x] 2.1 `BackoffPolicy`: exponential backoff with jitter, injected randomness + unit tests
+- [ ] 2.2 Migration `V2`: `max_attempts` (default 5, optional per job via API) + tests
+- [ ] 2.3 Repository: guarded failure transition (`FAILED_RETRY` with backoff, or `DEAD` keeping `last_error`); claim also picks due `FAILED_RETRY` rows + ITs
+- [ ] 2.4 Worker failure path wired to the repository + unit tests + retry-then-dead IT
+- [ ] 2.5 Concurrency IT: retrying jobs are held by exactly one worker at a time; mutation checks
 
 ## Batch 3 — leases and crash recovery (planned)
 - [ ] 3.1 Migration: `locked_until`; claim sets lease
