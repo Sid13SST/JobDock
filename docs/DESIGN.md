@@ -44,7 +44,9 @@ Batch 1 (`V1__create_jobs.sql`):
 | `last_error`      | `text` NULL   | reserved for the failure path                       |
 | `created_at`, `updated_at`, `started_at`, `finished_at` | `timestamptz` |              |
 
-Index: partial index on `(run_at)` `WHERE status IN ('QUEUED','FAILED_RETRY')`
+Constraint `jobs_owner_iff_running`: `locked_by` is set if and only if `status = 'RUNNING'`.
+
+Index: partial index on `(run_at, created_at)` `WHERE status IN ('QUEUED','FAILED_RETRY')`
 so the claim query only scans claimable rows.
 
 Planned (later migrations): `max_attempts int`, `locked_until timestamptz`
