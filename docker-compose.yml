@@ -1,0 +1,70 @@
+# Local demo stack: Postgres 16, one API instance (no workers) and two worker instances.
+#   ./mvnw -B -DskipTests package && docker compose up -d --build --wait
+# The database password below is a local-only default (override with JOBDOCK_DB_PASSWORD);
+# Postgres is not published to the host, it is reachable only on the compose network.
+name: jobdock
+
+x-db-env: &db-env
+  JOBDOCK_DB_URL: jdbc:postgresql://postgres:5432/jobdock
+  JOBDOCK_DB_USER: jobdock
+  JOBDOCK_DB_PASSWORD: ${JOBDOCK_DB_PASSWORD:-jobdock-local-only}
+
+x-app-healthcheck: &app-healthcheck
+  test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:8080/metrics"]
+  interval: 3s
+  timeout: 3s
+  retries: 30
+  start_period: 10s
+
+services:
+  postgres:
+    image: postgres:16.16-alpine3.24
+    environment:
+      POSTGRES_DB: jobdock
+      POSTGRES_USER: jobdock
+      POSTGRES_PASSWORD: ${JOBDOCK_DB_PASSWORD:-jobdock-local-only}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jobdock -d jobdock"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # REST API only. Runs the Flyway migrations on startup; workers wait for it.
+  api:
+    build: .
+    image: jobdock:local
+    pull_policy: build
+    environment:
+      <<: *db-env
+      JOBDOCK_WORKER_ENABLED: "false"
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck: *app-healthcheck
+
+  # Workers with the demo handler. Short lease so the crash demo recovers in seconds
+  # (defaults are lease 30s, reaper every 5s).
+  worker:
+    image: jobdock:local
+    pull_policy: never
+    environment:
+      <<: *db-env
+      JOBDOCK_WORKER_ENABLED: "true"
+      JOBDOCK_WORKER_THREADS: "1"
+      JOBDOCK_WORKER_BATCHSIZE: "1"
+      JOBDOCK_WORKER_LEASEDURATION: "6s"
+      JOBDOCK_WORKER_REAPERINTERVAL: "2s"
+      JOBDOCK_DEMO_ENABLED: "true"
+    deploy:
+      replicas: 2
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck: *app-healthcheck
+
+volumes:
+  pgdata:

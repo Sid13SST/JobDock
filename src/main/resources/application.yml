@@ -1,0 +1,10 @@
+spring:
+  application:
+    name: jobdock
+  datasource:
+    url: ${JOBDOCK_DB_URL:jdbc:postgresql://localhost:5432/jobdock}
+    username: ${JOBDOCK_DB_USER:jobdock}
+    password: ${JOBDOCK_DB_PASSWORD:jobdock}
+  mvc:
+    problemdetails:
+      enabled: true
