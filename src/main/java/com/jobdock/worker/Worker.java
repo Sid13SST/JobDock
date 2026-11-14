@@ -58,6 +58,12 @@ public class Worker {
         claimed.forEach(job -> held.put(job.id(), job.attempts()));
         try {
             for (Job job : claimed) {
+                if (Thread.currentThread().isInterrupted()) {
+                    // Shutdown timed out. Unstarted jobs stop being heartbeated (finally below) and the
+                    // reaper requeues them once their lease expires.
+                    log.warn("Worker {} interrupted; not starting the remaining jobs of its batch", id);
+                    break;
+                }
                 if (lost.remove(job.id())) {
                     log.warn("Lease on job {} (attempt {}) was lost before it started; skipping it", job.id(),
                             job.attempts());
@@ -66,6 +72,12 @@ public class Worker {
                 }
                 try {
                     execute(job);
+                } catch (RuntimeException e) {
+                    // Recording the result failed (e.g. database unavailable). Do not strand the rest of
+                    // the batch: this job is dropped from the heartbeat set below, so its lease expires
+                    // and the reaper requeues it; the handler will then run again (at-least-once).
+                    log.error("Worker {} could not record the result of job {} (attempt {}); it will be "
+                            + "recovered after its lease expires", id, job.id(), job.attempts(), e);
                 } finally {
                     held.remove(job.id());
                     lost.remove(job.id());
@@ -110,8 +122,11 @@ public class Worker {
         }
         try {
             handler.handle(job);
-        } catch (Exception e) {
-            fail(job, describe(e), e);
+        } catch (Throwable t) {
+            // Any Throwable counts as a failed attempt, including Errors such as StackOverflowError or
+            // AssertionError. After an OutOfMemoryError the JVM may be unusable; if recording fails,
+            // lease expiry recovers the job.
+            fail(job, describe(t), t);
             return;
         }
         if (!repository.markSucceeded(job.id(), id, job.attempts())) {
@@ -119,7 +134,7 @@ public class Worker {
         }
     }
 
-    private void fail(Job job, String error, Exception cause) {
+    private void fail(Job job, String error, Throwable cause) {
         Duration delay = backoff.delay(job.attempts());
         Optional<FailureOutcome> outcome = repository.markFailed(job.id(), id, job.attempts(), error, delay);
         if (outcome.isEmpty()) {

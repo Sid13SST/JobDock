@@ -198,7 +198,7 @@ FROM expired WHERE j.id = expired.id
 
 ## 6. Retry and backoff [B2]
 
-On handler failure (an `Exception` thrown by `handle`), with `n = attempts`
+On handler failure (any `Throwable` thrown by `handle`), with `n = attempts`
 (already incremented by the claim):
 
 ```
@@ -224,8 +224,15 @@ delay(n) = min(base * 2^(n-1), max_delay) * (0.5 + 0.5 r),   r uniform in [0, 1)
   `run_at <= now()`, with the same `SKIP LOCKED` protocol.
 - A job of an unregistered type cannot normally be claimed; if it ever is, it is
   recorded as a failed attempt rather than stranded.
-- Not handled: a handler throwing an `Error` (e.g. `OutOfMemoryError`) is not
-  caught; the job stays `RUNNING` until lease recovery exists (Batch 3).
+- Any `Throwable` from a handler is a failed attempt [B3], including `Error`s
+  such as `StackOverflowError` or `AssertionError`. After an `OutOfMemoryError`
+  the JVM may be unusable; if the failure cannot be recorded, lease expiry
+  recovers the job.
+- If writing a result (success or failure) throws, e.g. the database is
+  unreachable, the worker logs it and continues with the rest of its batch [B3].
+  That job is no longer heartbeated, so its lease expires and the reaper requeues
+  it; the handler runs again. On an interrupt (shutdown timeout) the worker stops
+  starting further jobs of its batch; those leases expire the same way.
 
 ## 7. Delivery semantics (honest statement)
 

@@ -98,7 +98,8 @@ public class WorkerPool implements SmartLifecycle {
             int claimed;
             try {
                 claimed = worker.pollOnce();
-            } catch (RuntimeException e) {
+            } catch (Throwable e) {
+                // Never let the poll thread die: log, back off, poll again.
                 log.error("Worker {} poll failed; retrying after {}", worker.id(), props.idleDelay(), e);
                 claimed = 0;
             }

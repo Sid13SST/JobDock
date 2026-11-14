@@ -22,6 +22,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataAccessResourceFailureException;
 
 /** Worker control flow with a stubbed repository; real claim/transition semantics are covered by ITs. */
 class WorkerTest {
@@ -148,6 +149,73 @@ class WorkerTest {
     }
 
     @Test
+    void errorsThrownByHandlersAreRecordedAsFailures() {
+        Job overflow = running("overflow", 1);
+        Job assertion = running("assert", 2);
+        Worker worker = worker(10, throwing("overflow", new StackOverflowError()),
+                throwing("assert", new AssertionError("invariant broken")));
+        when(repository.claim(any(), any(), anyInt(), any())).thenReturn(List.of(overflow, assertion));
+        when(repository.markFailed(any(), any(), anyInt(), any(), any()))
+                .thenReturn(Optional.of(new FailureOutcome(JobStatus.FAILED_RETRY, Instant.now())));
+
+        assertThat(worker.pollOnce()).isEqualTo(2);
+
+        verify(repository).markFailed(overflow.id(), "w1", 1, "java.lang.StackOverflowError", Duration.ofMillis(500));
+        verify(repository).markFailed(assertion.id(), "w1", 2, "java.lang.AssertionError: invariant broken",
+                Duration.ofSeconds(1));
+    }
+
+    @Test
+    void failedResultWriteDoesNotStrandTheRestOfTheBatch() {
+        Job a = running("email", 1);
+        Job b = running("boom", 1);
+        Job c = running("email", 1);
+        Worker worker = worker(10, recording("email"), throwing("boom", new IllegalStateException("x")));
+        when(repository.claim(any(), any(), anyInt(), any())).thenReturn(List.of(a, b, c));
+        when(repository.markSucceeded(eq(a.id()), any(), anyInt()))
+                .thenThrow(new DataAccessResourceFailureException("connection lost"));
+        when(repository.markFailed(eq(b.id()), any(), anyInt(), any(), any()))
+                .thenThrow(new DataAccessResourceFailureException("connection lost"));
+        when(repository.markSucceeded(eq(c.id()), any(), anyInt())).thenReturn(true);
+
+        assertThat(worker.pollOnce()).isEqualTo(3);
+
+        assertThat(handled).containsExactly(a.id(), c.id());
+        verify(repository).markSucceeded(c.id(), "w1", 1);
+        assertThat(worker.heldClaims()).as("nothing left heartbeated; leases of a and b will expire").isEmpty();
+    }
+
+    @Test
+    void interruptedWorkerDoesNotStartTheRestOfTheBatch() {
+        Job first = running("email", 1);
+        Job second = running("email", 1);
+        JobHandler interrupting = new JobHandler() {
+            @Override
+            public String type() {
+                return "email";
+            }
+
+            @Override
+            public void handle(Job job) {
+                handled.add(job.id());
+                Thread.currentThread().interrupt(); // as WorkerPool.stop() does after its timeout
+            }
+        };
+        Worker worker = worker(10, interrupting);
+        when(repository.claim(any(), any(), anyInt(), any())).thenReturn(List.of(first, second));
+        when(repository.markSucceeded(any(), any(), anyInt())).thenReturn(true);
+        try {
+            worker.pollOnce();
+        } finally {
+            Thread.interrupted(); // clear the flag for the next test
+        }
+
+        assertThat(handled).containsExactly(first.id());
+        verify(repository, never()).markSucceeded(eq(second.id()), any(), anyInt());
+        assertThat(worker.heldClaims()).isEmpty();
+    }
+
+    @Test
     void lostOwnershipOnCompletionIsTolerated() {
         Job job = running("email", 1);
         Worker worker = worker(10, recording("email"));
@@ -174,6 +242,24 @@ class WorkerTest {
                 handled.add(job.id());
             }
         };
+    }
+
+    private static JobHandler throwing(String type, Error e) {
+        return new JobHandler() {
+            @Override
+            public String type() {
+                return type;
+            }
+
+            @Override
+            public void handle(Job job) {
+                throw e;
+            }
+        };
+    }
+
+    private static JobHandler throwing(String type, RuntimeException e) {
+        return failing(type, e);
     }
 
     private static JobHandler failing(String type, RuntimeException e) {

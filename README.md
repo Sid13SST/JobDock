@@ -61,9 +61,17 @@ number; `jobdock.retry.base-delay` 1s, `jobdock.retry.max-delay` 5m). After
 `maxAttempts` attempts (default 5) the job is `DEAD`; `lastError` holds the last
 failure. Retry times use the database clock. Details: docs/DESIGN.md section 6.
 
-Not yet implemented: lease/heartbeat and recovery of jobs whose worker crashed
-mid-run (Batch 3). Until then such jobs stay `RUNNING`, as do jobs whose handler
-throws an `Error` rather than an `Exception`.
+## Leases and crash recovery
+
+A claim holds a lease (`jobdock.worker.lease-duration`, default 30s) that a
+heartbeat thread extends every lease/3 while the worker holds the job. If a
+worker dies, its heartbeats stop; once the lease expires, a reaper (every
+`jobdock.worker.reaper-interval`, default 5s, safe to run on many instances)
+moves the job to `FAILED_RETRY`, or `DEAD` if its attempts are used up, and
+another worker runs it again. Results are fenced by worker id and attempt, so a
+worker whose lease expired cannot overwrite the new owner's result. Any
+`Throwable` from a handler counts as a failed attempt. Details:
+docs/DESIGN.md sections 4, 5 and 5a.
 
 ## Delivery semantics
 At-least-once. Handlers must be idempotent. Exactly-once is not claimed.
