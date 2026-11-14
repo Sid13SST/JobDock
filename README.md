@@ -7,6 +7,23 @@ Goal: jobs are not lost and not run twice by accident when workers crash or fail
 built and what is planned, and [docs/DESIGN.md](docs/DESIGN.md) for the state
 machine, schema, claim protocol and delivery semantics.
 
+## Build and test
+
+Requires Java 21 and a running Docker daemon (integration tests start
+PostgreSQL 16 with Testcontainers; the database is never mocked).
+
+```
+./mvnw verify
+```
+
+Unit tests (`*Test`) run in Surefire, integration tests (`*IT`) in Failsafe.
+CI runs the same command on GitHub Actions (`.github/workflows/ci.yml`).
+
+To run the app you need a PostgreSQL database (defaults:
+`jdbc:postgresql://localhost:5432/jobdock`, user/password `jobdock`; override with
+`JOBDOCK_DB_URL`, `JOBDOCK_DB_USER`, `JOBDOCK_DB_PASSWORD`), then `./mvnw spring-boot:run`.
+A Docker Compose setup is planned (docs/TASKS.md, batch 4).
+
 ## API
 
 `POST /jobs` — enqueue a job.
