@@ -6,7 +6,7 @@ Each task = one reviewable commit with its own tests. `./mvnw verify` must pass.
 - [x] CLAUDE.md, docs/DESIGN.md, docs/TASKS.md, README.md
 
 ## Batch 1 — enqueue, claim, success path
-- [ ] 1.1 Maven project skeleton (Spring Boot 3.5, Java 21, Maven wrapper, Surefire/Failsafe split, Testcontainers wiring)
+- [x] 1.1 Maven project skeleton (Spring Boot 3.5, Java 21, Maven wrapper, Surefire/Failsafe split, Testcontainers wiring)
 - [ ] 1.2 Flyway migration `V1__create_jobs.sql` + migration IT
 - [ ] 1.3 `JobRepository`: insert with idempotency key, find, claim (SKIP LOCKED), mark succeeded + ITs
 - [ ] 1.4 Enqueue REST API (`POST /jobs`, `GET /jobs/{id}`, `Idempotency-Key`) + unit and ITs
