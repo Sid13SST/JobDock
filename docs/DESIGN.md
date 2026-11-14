@@ -1,6 +1,6 @@
 # JobDock design
 
-Status markers: **[B1]** implemented in Batch 1, **[planned]** designed but not yet built.
+Status markers: **[B1]**–**[B4]** = implemented in that batch. Nothing in this document is still planned.
 
 ## 1. Job state machine
 

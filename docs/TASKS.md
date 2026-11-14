@@ -50,5 +50,9 @@ result-write failure aborting the batch -> `WorkerTest`, `ResultWriteFailureIT`.
 ## Batch 4 — ops, demo, README
 - [x] 4.1 `GET /metrics` (counts per state, oldest due age, retries, dead-lettered, lease expirations; `V4` adds `lease_expirations`) + IT
 - [x] 4.2 Sample handler + Dockerfile + `docker-compose.yml` (api, workers, Postgres 16; pinned tags, healthchecks) + crash demo script, actually run
-- [ ] 4.3 Verify the app starts standalone (`java -jar`) against a real Postgres
-- [ ] 4.4 README for interviews: problem, architecture, guarantees, how to run, trade-offs, next steps
+- [x] 4.3 Verify the app starts standalone (`java -jar`) against a real Postgres — done by hand: `java -jar target/jobdock.jar` against `postgres:16.16-alpine3.24` (docker run); 4 migrations applied, idempotent replay 200, a demo job SUCCEEDED, an invalid one DEAD after 2 attempts, `/metrics` matched, SIGTERM shut the pool down. Not automated.
+- [x] 4.4 README for interviews: problem, architecture, guarantees, how to run, trade-offs, next steps
+
+Not done (listed in README "What I would do next"): a test of a full database outage
+(previously listed as 4.3 "poll loop resilience"; only a failed result write is tested),
+load/latency measurements, a CI job running the compose demo.
