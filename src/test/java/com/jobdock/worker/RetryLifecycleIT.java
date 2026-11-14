@@ -31,7 +31,7 @@ class RetryLifecycleIT extends PostgresIntegrationTest {
     void failingJobIsRetriedWithBackoffThenDeadLetteredWithLastError() {
         // r = 0 -> delays 5s, 10s for attempts 1, 2 (base 10s, halved by the minimum jitter factor).
         BackoffPolicy backoff = new BackoffPolicy(Duration.ofSeconds(10), Duration.ofMinutes(1), () -> 0.0);
-        Worker worker = new Worker("w1", repository, registry(Integer.MAX_VALUE), backoff, 10);
+        Worker worker = new Worker("w1", repository, registry(Integer.MAX_VALUE), backoff, 10, Duration.ofSeconds(30));
         UUID id = enqueue(3);
 
         assertThat(worker.pollOnce()).isEqualTo(1);
@@ -67,7 +67,7 @@ class RetryLifecycleIT extends PostgresIntegrationTest {
     @Test
     void jobThatFailsTwiceThenSucceedsEndsSucceeded() {
         BackoffPolicy backoff = new BackoffPolicy(Duration.ofSeconds(10), Duration.ofMinutes(1), () -> 0.0);
-        Worker worker = new Worker("w1", repository, registry(2), backoff, 10);
+        Worker worker = new Worker("w1", repository, registry(2), backoff, 10, Duration.ofSeconds(30));
         UUID id = enqueue(5);
 
         worker.pollOnce();

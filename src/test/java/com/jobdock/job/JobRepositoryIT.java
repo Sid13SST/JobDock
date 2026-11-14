@@ -29,6 +29,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 class JobRepositoryIT extends PostgresIntegrationTest {
 
     private static final Set<String> NOOP = Set.of("noop");
+    private static final Duration LEASE = Duration.ofSeconds(30);
 
     @Autowired
     JobRepository repository;
@@ -96,7 +97,7 @@ class JobRepositoryIT extends PostgresIntegrationTest {
         Job newer = insertDue(Instant.now().minusSeconds(10));
         insertDue(Instant.now().minusSeconds(5));
 
-        List<Job> claimed = repository.claim("worker-1", NOOP, 2);
+        List<Job> claimed = repository.claim("worker-1", NOOP, 2, LEASE);
 
         assertThat(claimed).extracting(Job::id).containsExactlyInAnyOrder(older.id(), newer.id());
         assertThat(claimed).allSatisfy(j -> {
@@ -104,22 +105,30 @@ class JobRepositoryIT extends PostgresIntegrationTest {
             assertThat(j.lockedBy()).isEqualTo("worker-1");
             assertThat(j.attempts()).isEqualTo(1);
             assertThat(j.startedAt()).isNotNull();
+            // locked_until and started_at come from the same statement's now().
+            assertThat(Duration.between(j.startedAt(), j.lockedUntil())).isEqualTo(LEASE);
         });
+    }
+
+    @Test
+    void claimRejectsNonPositiveLease() {
+        assertThatThrownBy(() -> repository.claim("worker-1", NOOP, 1, Duration.ZERO))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
     void claimIgnoresJobsScheduledInTheFuture() {
         insertDue(Instant.now().plus(Duration.ofHours(1)));
 
-        assertThat(repository.claim("worker-1", NOOP, 10)).isEmpty();
+        assertThat(repository.claim("worker-1", NOOP, 10, LEASE)).isEmpty();
     }
 
     @Test
     void claimedJobIsNotClaimedAgain() {
         insertDue(null);
-        assertThat(repository.claim("worker-1", NOOP, 10)).hasSize(1);
+        assertThat(repository.claim("worker-1", NOOP, 10, LEASE)).hasSize(1);
 
-        assertThat(repository.claim("worker-2", NOOP, 10)).isEmpty();
+        assertThat(repository.claim("worker-2", NOOP, 10, LEASE)).isEmpty();
     }
 
     @Test
@@ -128,14 +137,14 @@ class JobRepositoryIT extends PostgresIntegrationTest {
         Job other = repository.insertIfAbsent(UUID.randomUUID(),
                 new NewJob("unhandled", objectMapper.createObjectNode(), null, null)).orElseThrow();
 
-        assertThat(repository.claim("worker-1", Set.of("noop", "email"), 10)).extracting(Job::type).containsExactly("noop");
-        assertThat(repository.claim("worker-1", Set.of(), 10)).isEmpty();
+        assertThat(repository.claim("worker-1", Set.of("noop", "email"), 10, LEASE)).extracting(Job::type).containsExactly("noop");
+        assertThat(repository.claim("worker-1", Set.of(), 10, LEASE)).isEmpty();
         assertThat(repository.findById(other.id()).orElseThrow().status()).isEqualTo(JobStatus.QUEUED);
     }
 
     @Test
     void claimRejectsNonPositiveLimit() {
-        assertThatThrownBy(() -> repository.claim("worker-1", NOOP, 0)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> repository.claim("worker-1", NOOP, 0, LEASE)).isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
@@ -150,7 +159,7 @@ class JobRepositoryIT extends PostgresIntegrationTest {
                 ps.executeQuery();
             }
 
-            List<Job> claimed = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> repository.claim("worker-1", NOOP, 10));
+            List<Job> claimed = assertTimeoutPreemptively(Duration.ofSeconds(5), () -> repository.claim("worker-1", NOOP, 10, LEASE));
 
             assertThat(claimed).extracting(Job::id).containsExactly(free.id());
             other.rollback();
@@ -173,7 +182,7 @@ class JobRepositoryIT extends PostgresIntegrationTest {
                 start.await();
                 List<UUID> mine = new ArrayList<>();
                 List<Job> batch;
-                while (!(batch = repository.claim(workerId, NOOP, 5)).isEmpty()) {
+                while (!(batch = repository.claim(workerId, NOOP, 5, LEASE)).isEmpty()) {
                     batch.forEach(j -> mine.add(j.id()));
                 }
                 return mine;
@@ -192,7 +201,7 @@ class JobRepositoryIT extends PostgresIntegrationTest {
     @Test
     void markSucceededOnlyByOwnerWhileRunning() {
         insertDue(null);
-        Job job = repository.claim("worker-1", NOOP, 1).getFirst();
+        Job job = repository.claim("worker-1", NOOP, 1, LEASE).getFirst();
 
         assertThat(repository.markSucceeded(job.id(), "worker-2")).isFalse();
         assertThat(repository.findById(job.id()).orElseThrow().status()).isEqualTo(JobStatus.RUNNING);
@@ -201,6 +210,7 @@ class JobRepositoryIT extends PostgresIntegrationTest {
         Job done = repository.findById(job.id()).orElseThrow();
         assertThat(done.status()).isEqualTo(JobStatus.SUCCEEDED);
         assertThat(done.lockedBy()).isNull();
+        assertThat(done.lockedUntil()).isNull();
         assertThat(done.finishedAt()).isNotNull();
 
         assertThat(repository.markSucceeded(job.id(), "worker-1")).isFalse();

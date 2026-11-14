@@ -50,13 +50,22 @@ Batch 2 (`V2__add_max_attempts.sql`):
 |----------------|-------|-----------------------------------------------------------------------|
 | `max_attempts` | `int` | total attempts allowed (first run included), CHECK 1..100; default 5 |
 
+Batch 3 (`V3__add_lease.sql`):
+
+| Column         | Type              | Notes                                                        |
+|----------------|-------------------|--------------------------------------------------------------|
+| `locked_until` | `timestamptz` NULL | lease expiry while `RUNNING`; CHECK set iff `status = 'RUNNING'` |
+
+Index `jobs_running_lease_idx` on `(locked_until) WHERE status = 'RUNNING'` for the reaper.
+Rows that were `RUNNING` when V3 ran get `locked_until = now()` (already expired), so
+they are recovered.
+
 Constraint `jobs_owner_iff_running`: `locked_by` is set if and only if `status = 'RUNNING'`.
 
 Index: partial index on `(run_at, created_at)` `WHERE status IN ('QUEUED','FAILED_RETRY')`
 so the claim query only scans claimable rows.
 
-Planned (later migrations): `locked_until timestamptz`
-(lease expiry), `heartbeat_at timestamptz`.
+No separate `heartbeat_at` column: a heartbeat simply moves `locked_until`.
 
 ## 3. Enqueue and idempotency [B1]
 

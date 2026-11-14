@@ -14,7 +14,7 @@ class MigrationIT extends PostgresIntegrationTest {
     void allMigrationsAreApplied() {
         String version = jdbc.sql("SELECT max(version) FROM flyway_schema_history WHERE success")
                 .query(String.class).single();
-        assertThat(version).isEqualTo("2");
+        assertThat(version).isEqualTo("3");
     }
 
     @Test
@@ -35,6 +35,17 @@ class MigrationIT extends PostgresIntegrationTest {
         assertThatThrownBy(() -> jdbc.sql("UPDATE jobs SET max_attempts = 0 WHERE id = ?").param(id).update())
                 .isInstanceOf(DataIntegrityViolationException.class);
         assertThatThrownBy(() -> jdbc.sql("UPDATE jobs SET max_attempts = 101 WHERE id = ?").param(id).update())
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
+    void runningRequiresLeaseExpiryAndOtherStatesForbidIt() {
+        UUID id = UUID.randomUUID();
+        assertThatThrownBy(() -> jdbc.sql("INSERT INTO jobs (id, type, payload, status, locked_by) "
+                        + "VALUES (?, 'email', '{}'::jsonb, 'RUNNING', 'w1')").param(id).update())
+                .isInstanceOf(DataIntegrityViolationException.class);
+        assertThatThrownBy(() -> jdbc.sql("INSERT INTO jobs (id, type, payload, status, locked_until) "
+                        + "VALUES (?, 'email', '{}'::jsonb, 'QUEUED', now())").param(id).update())
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 

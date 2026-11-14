@@ -23,14 +23,16 @@ public class Worker {
     private final HandlerRegistry handlers;
     private final BackoffPolicy backoff;
     private final int batchSize;
+    private final Duration lease;
 
     public Worker(String id, JobRepository repository, HandlerRegistry handlers, BackoffPolicy backoff,
-            int batchSize) {
+            int batchSize, Duration lease) {
         this.id = id;
         this.repository = repository;
         this.handlers = handlers;
         this.backoff = backoff;
         this.batchSize = batchSize;
+        this.lease = lease;
     }
 
     public String id() {
@@ -43,7 +45,7 @@ public class Worker {
      * @return the number of jobs claimed (0 means the queue had nothing due for us)
      */
     public int pollOnce() {
-        List<Job> claimed = repository.claim(id, handlers.types(), batchSize);
+        List<Job> claimed = repository.claim(id, handlers.types(), batchSize, lease);
         for (Job job : claimed) {
             execute(job);
         }

@@ -15,6 +15,7 @@ public record Job(
         String idempotencyKey,
         Instant runAt,
         String lockedBy,
+        Instant lockedUntil,
         String lastError,
         Instant createdAt,
         Instant updatedAt,

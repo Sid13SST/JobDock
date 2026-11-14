@@ -26,7 +26,7 @@ public class JobRepository {
 
     private static final String COLUMNS = """
             id, type, payload, status, attempts, max_attempts, idempotency_key, run_at, locked_by,
-            last_error, created_at, updated_at, started_at, finished_at""";
+            locked_until, last_error, created_at, updated_at, started_at, finished_at""";
 
     /** {@link #COLUMNS} qualified with alias {@code j}, for UPDATE ... FROM ... RETURNING. */
     private static final String J_COLUMNS = Arrays.stream(COLUMNS.split(","))
@@ -82,13 +82,17 @@ public class JobRepository {
 
     /**
      * Atomically claims up to {@code limit} due QUEUED or FAILED_RETRY jobs of the given {@code types} for
-     * {@code workerId}: sets them RUNNING, records the owner and increments {@code attempts}.
+     * {@code workerId}: sets them RUNNING, records the owner, increments {@code attempts} and sets
+     * the lease expiry {@code locked_until = now() + lease} (database clock).
      * Rows locked by a concurrent claimer are skipped, not waited on. The locking CTE is
      * evaluated exactly once. Jobs of other types are left untouched.
      */
-    public List<Job> claim(String workerId, Collection<String> types, int limit) {
+    public List<Job> claim(String workerId, Collection<String> types, int limit, Duration lease) {
         if (limit <= 0) {
             throw new IllegalArgumentException("limit must be positive");
+        }
+        if (lease.isNegative() || lease.isZero()) {
+            throw new IllegalArgumentException("lease must be positive");
         }
         if (types.isEmpty()) {
             return List.of();
@@ -103,12 +107,14 @@ public class JobRepository {
                         )
                         UPDATE jobs j
                         SET status = 'RUNNING', locked_by = :worker, attempts = j.attempts + 1,
+                            locked_until = now() + :leaseMillis * interval '1 millisecond',
                             started_at = now(), updated_at = now()
                         FROM next
                         WHERE j.id = next.id
                         RETURNING\s""" + J_COLUMNS)
                 .param("limit", limit)
                 .param("worker", workerId)
+                .param("leaseMillis", lease.toMillis())
                 .param("types", types.toArray(String[]::new))
                 .query(this::mapRow)
                 .list();
@@ -122,7 +128,7 @@ public class JobRepository {
     public boolean markSucceeded(UUID id, String workerId) {
         int updated = jdbc.sql("""
                         UPDATE jobs
-                        SET status = 'SUCCEEDED', locked_by = NULL, finished_at = now(), updated_at = now()
+                        SET status = 'SUCCEEDED', locked_by = NULL, locked_until = NULL, finished_at = now(), updated_at = now()
                         WHERE id = ? AND status = 'RUNNING' AND locked_by = ?""")
                 .params(id, workerId)
                 .update();
@@ -148,6 +154,7 @@ public class JobRepository {
                                                ELSE now() + :delayMillis * interval '1 millisecond' END,
                             finished_at = CASE WHEN attempts >= max_attempts THEN now() END,
                             locked_by   = NULL,
+                            locked_until = NULL,
                             last_error  = :error,
                             updated_at  = now()
                         WHERE id = :id AND status = 'RUNNING' AND locked_by = :worker
@@ -187,6 +194,7 @@ public class JobRepository {
                     rs.getString("idempotency_key"),
                     instant(rs, "run_at"),
                     rs.getString("locked_by"),
+                    instant(rs, "locked_until"),
                     rs.getString("last_error"),
                     instant(rs, "created_at"),
                     instant(rs, "updated_at"),

@@ -48,7 +48,7 @@ public class WorkerPool implements SmartLifecycle {
         }
         running = true;
         for (int i = 0; i < props.threads(); i++) {
-            Worker worker = new Worker(instanceId + "-" + i, repository, handlers, backoff, props.batchSize());
+            Worker worker = new Worker(instanceId + "-" + i, repository, handlers, backoff, props.batchSize(), props.leaseDuration());
             Thread t = new Thread(() -> loop(worker), threadNamePrefix() + i);
             threads.add(t);
             t.start();

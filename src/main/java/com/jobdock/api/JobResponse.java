@@ -16,6 +16,7 @@ public record JobResponse(
         String idempotencyKey,
         Instant runAt,
         String lockedBy,
+        Instant lockedUntil,
         String lastError,
         Instant createdAt,
         Instant updatedAt,
@@ -24,7 +25,7 @@ public record JobResponse(
 
     static JobResponse from(Job job) {
         return new JobResponse(job.id(), job.type(), job.payload(), job.status(), job.attempts(), job.maxAttempts(),
-                job.idempotencyKey(), job.runAt(), job.lockedBy(), job.lastError(), job.createdAt(),
+                job.idempotencyKey(), job.runAt(), job.lockedBy(), job.lockedUntil(), job.lastError(), job.createdAt(),
                 job.updatedAt(), job.startedAt(), job.finishedAt());
     }
 }

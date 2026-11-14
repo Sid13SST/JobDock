@@ -61,7 +61,7 @@ class ConcurrentWorkersIT extends PostgresIntegrationTest {
         try {
             List<Future<Integer>> claimedPerWorker = new ArrayList<>();
             for (int w = 0; w < workers; w++) {
-                Worker worker = new Worker("worker-" + w, repository, registry, BACKOFF, 10);
+                Worker worker = new Worker("worker-" + w, repository, registry, BACKOFF, 10, Duration.ofSeconds(30));
                 claimedPerWorker.add(pool.submit(() -> {
                     start.await();
                     int total = 0;

@@ -36,10 +36,10 @@ class WorkerTest {
     @Test
     void claimsOnlyRegisteredTypesWithConfiguredBatchSize() {
         Worker worker = worker(7, recording("email"));
-        when(repository.claim(any(), any(), anyInt())).thenReturn(List.of());
+        when(repository.claim(any(), any(), anyInt(), any())).thenReturn(List.of());
 
         assertThat(worker.pollOnce()).isZero();
-        verify(repository).claim("w1", Set.of("email"), 7);
+        verify(repository).claim("w1", Set.of("email"), 7, Duration.ofSeconds(30));
     }
 
     @Test
@@ -47,7 +47,7 @@ class WorkerTest {
         Job a = running("email", 1);
         Job b = running("email", 1);
         Worker worker = worker(10, recording("email"));
-        when(repository.claim(any(), any(), anyInt())).thenReturn(List.of(a, b));
+        when(repository.claim(any(), any(), anyInt(), any())).thenReturn(List.of(a, b));
         when(repository.markSucceeded(any(), eq("w1"))).thenReturn(true);
 
         assertThat(worker.pollOnce()).isEqualTo(2);
@@ -63,7 +63,7 @@ class WorkerTest {
         Job bad = running("boom", 3);
         Job good = running("email", 1);
         Worker worker = worker(10, failing("boom", new IllegalStateException("disk full")), recording("email"));
-        when(repository.claim(any(), any(), anyInt())).thenReturn(List.of(bad, good));
+        when(repository.claim(any(), any(), anyInt(), any())).thenReturn(List.of(bad, good));
         when(repository.markSucceeded(any(), any())).thenReturn(true);
         when(repository.markFailed(any(), any(), any(), any()))
                 .thenReturn(Optional.of(new FailureOutcome(JobStatus.FAILED_RETRY, Instant.now())));
@@ -82,7 +82,7 @@ class WorkerTest {
         Job a = running("boom", 5);
         Job b = running("boom", 1);
         Worker worker = worker(10, failing("boom", new RuntimeException()));
-        when(repository.claim(any(), any(), anyInt())).thenReturn(List.of(a, b));
+        when(repository.claim(any(), any(), anyInt(), any())).thenReturn(List.of(a, b));
         when(repository.markFailed(eq(a.id()), any(), any(), any()))
                 .thenReturn(Optional.of(new FailureOutcome(JobStatus.DEAD, Instant.now())));
         when(repository.markFailed(eq(b.id()), any(), any(), any())).thenReturn(Optional.empty());
@@ -97,7 +97,7 @@ class WorkerTest {
     void jobWithoutHandlerIsRecordedAsFailedNotStranded() {
         Job orphan = running("unknown", 1);
         Worker worker = worker(10, recording("email"));
-        when(repository.claim(any(), any(), anyInt())).thenReturn(List.of(orphan));
+        when(repository.claim(any(), any(), anyInt(), any())).thenReturn(List.of(orphan));
         when(repository.markFailed(any(), any(), any(), any())).thenReturn(Optional.empty());
 
         worker.pollOnce();
@@ -110,7 +110,7 @@ class WorkerTest {
     void lostOwnershipOnCompletionIsTolerated() {
         Job job = running("email", 1);
         Worker worker = worker(10, recording("email"));
-        when(repository.claim(any(), any(), anyInt())).thenReturn(List.of(job));
+        when(repository.claim(any(), any(), anyInt(), any())).thenReturn(List.of(job));
         when(repository.markSucceeded(job.id(), "w1")).thenReturn(false);
 
         assertThat(worker.pollOnce()).isEqualTo(1);
@@ -118,7 +118,7 @@ class WorkerTest {
     }
 
     private Worker worker(int batchSize, JobHandler... handlers) {
-        return new Worker("w1", repository, new HandlerRegistry(List.of(handlers)), BACKOFF, batchSize);
+        return new Worker("w1", repository, new HandlerRegistry(List.of(handlers)), BACKOFF, batchSize, Duration.ofSeconds(30));
     }
 
     private JobHandler recording(String type) {
@@ -152,6 +152,6 @@ class WorkerTest {
     private static Job running(String type, int attempts) {
         Instant now = Instant.now();
         return new Job(UUID.randomUUID(), type, JsonNodeFactory.instance.objectNode(), JobStatus.RUNNING, attempts,
-                5, null, now, "w1", null, now, now, now, null);
+                5, null, now, "w1", now.plusSeconds(30), null, now, now, now, null);
     }
 }

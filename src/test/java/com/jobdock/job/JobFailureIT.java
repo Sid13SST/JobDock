@@ -16,6 +16,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 class JobFailureIT extends PostgresIntegrationTest {
 
     private static final Set<String> NOOP = Set.of("noop");
+    private static final Duration LEASE = Duration.ofSeconds(30);
 
     @Autowired
     JobRepository repository;
@@ -30,6 +31,7 @@ class JobFailureIT extends PostgresIntegrationTest {
         Job failed = reload(job);
         assertThat(failed.status()).isEqualTo(JobStatus.FAILED_RETRY);
         assertThat(failed.lockedBy()).isNull();
+        assertThat(failed.lockedUntil()).isNull();
         assertThat(failed.lastError()).isEqualTo("boom");
         assertThat(failed.finishedAt()).isNull();
         assertThat(failed.attempts()).isEqualTo(1);
@@ -49,6 +51,7 @@ class JobFailureIT extends PostgresIntegrationTest {
         assertThat(dead.status()).isEqualTo(JobStatus.DEAD);
         assertThat(dead.lastError()).isEqualTo("fatal");
         assertThat(dead.lockedBy()).isNull();
+        assertThat(dead.lockedUntil()).isNull();
         assertThat(dead.finishedAt()).isNotNull();
         assertThat(dead.runAt()).as("no retry scheduled").isEqualTo(job.runAt());
     }
@@ -70,10 +73,10 @@ class JobFailureIT extends PostgresIntegrationTest {
         Job job = claimNew(3);
         repository.markFailed(job.id(), "w1", "boom", Duration.ofHours(1));
 
-        assertThat(repository.claim("w2", NOOP, 10)).isEmpty();
+        assertThat(repository.claim("w2", NOOP, 10, LEASE)).isEmpty();
 
         makeDue(job);
-        List<Job> retried = repository.claim("w2", NOOP, 10);
+        List<Job> retried = repository.claim("w2", NOOP, 10, LEASE);
         assertThat(retried).singleElement().satisfies(j -> {
             assertThat(j.id()).isEqualTo(job.id());
             assertThat(j.status()).isEqualTo(JobStatus.RUNNING);
@@ -89,7 +92,7 @@ class JobFailureIT extends PostgresIntegrationTest {
         repository.markFailed(job.id(), "w1", "fatal", Duration.ZERO);
         makeDue(job);
 
-        assertThat(repository.claim("w2", NOOP, 10)).isEmpty();
+        assertThat(repository.claim("w2", NOOP, 10, LEASE)).isEmpty();
     }
 
     @Test
@@ -104,7 +107,7 @@ class JobFailureIT extends PostgresIntegrationTest {
     private Job claimNew(int maxAttempts) {
         repository.insertIfAbsent(UUID.randomUUID(),
                 new NewJob("noop", JsonNodeFactory.instance.objectNode(), null, null, maxAttempts)).orElseThrow();
-        return repository.claim("w1", NOOP, 1).getFirst();
+        return repository.claim("w1", NOOP, 1, LEASE).getFirst();
     }
 
     /** Test-only time travel: make a scheduled retry due now instead of waiting for it. */

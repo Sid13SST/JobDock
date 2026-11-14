@@ -148,6 +148,6 @@ class JobControllerTest {
     private Job job() {
         Instant now = Instant.now();
         return new Job(UUID.randomUUID(), "email", om.createObjectNode(), JobStatus.QUEUED, 0, 5, null, now, null,
-                null, now, now, null, null);
+                null, null, now, now, null, null);
     }
 }
