@@ -76,6 +76,8 @@
     </dependencies>
 
     <build>
+        <!-- Stable jar name for the Dockerfile: target/jobdock.jar -->
+        <finalName>jobdock</finalName>
         <plugins>
             <plugin>
                 <groupId>org.springframework.boot</groupId>
