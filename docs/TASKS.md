@@ -19,7 +19,13 @@ Each task = one reviewable commit with its own tests. `./mvnw verify` must pass.
 - [x] 2.2 Migration `V2`: `max_attempts` (default 5, optional per job via API) + tests
 - [x] 2.3 Repository: guarded failure transition (`FAILED_RETRY` with backoff, or `DEAD` keeping `last_error`); claim also picks due `FAILED_RETRY` rows + ITs
 - [x] 2.4 Worker failure path wired to the repository + unit tests + retry-then-dead IT
-- [ ] 2.5 Concurrency IT: retrying jobs are held by exactly one worker at a time; mutation checks
+- [x] 2.5 Concurrency IT: retrying jobs are held by exactly one worker at a time; mutation checks
+
+Batch 2 mutation checks (each change made, tests run, change reverted; all detected):
+claim also taking `RUNNING` rows -> `RetryConcurrencyIT` (overlap detected);
+DEAD condition `attempts > max_attempts` -> `JobFailureIT`, `RetryLifecycleIT`;
+failure update without status/owner guard -> `JobFailureIT`;
+backoff without cap / without jitter -> `BackoffPolicyTest`.
 
 ## Batch 3 — leases and crash recovery (planned)
 - [ ] 3.1 Migration: `locked_until`; claim sets lease

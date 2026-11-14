@@ -203,6 +203,7 @@ for side effects). What the queue does guarantee:
 | 6 | API process crashes after enqueue commit | Job persists (Postgres durability) | by design |
 | 7 | Handler throws | `FAILED_RETRY`, `run_at = now() + delay(attempts)`, `last_error` set; retried when due | [B2] tested |
 | 8 | Handler fails `max_attempts` times | `DEAD`, `last_error` of the last attempt kept, never claimed again | [B2] tested |
+| 8a | Retrying jobs under contention | A job in retry is held by at most one worker at a time; each attempt number runs once | [B2] tested: 2 pools x 4 threads, 300 jobs failing twice then succeeding + 100 jobs dead after 3 attempts |
 | 9 | Worker process killed mid-job | Lease expires, job requeued, runs again | [planned] |
 | 10 | Worker stalls past lease, then completes | Completion rejected (not owner) | [planned] |
 | 11 | No handler registered for `type` | Not claimed; stays `QUEUED` | [B1] tested |
