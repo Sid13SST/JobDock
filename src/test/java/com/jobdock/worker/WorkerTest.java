@@ -107,6 +107,47 @@ class WorkerTest {
     }
 
     @Test
+    void heartbeatExtendsAllHeldClaimsAndJobLostBeforeStartIsSkipped() {
+        Job first = running("email", 1);
+        Job second = running("email", 1);
+        Worker[] self = new Worker[1];
+        // While the first job runs, a heartbeat finds that the second (not yet started) claim was lost.
+        JobHandler heartbeatingHandler = new JobHandler() {
+            @Override
+            public String type() {
+                return "email";
+            }
+
+            @Override
+            public void handle(Job job) {
+                handled.add(job.id());
+                if (job.id().equals(first.id())) {
+                    assertThat(self[0].heldClaims()).containsOnlyKeys(first.id(), second.id());
+                    self[0].heartbeat();
+                }
+            }
+        };
+        self[0] = worker(10, heartbeatingHandler);
+        when(repository.claim(any(), any(), anyInt(), any())).thenReturn(List.of(first, second));
+        when(repository.extendLeases(eq("w1"), any(), eq(Duration.ofSeconds(30)))).thenReturn(Set.of(first.id()));
+        when(repository.markSucceeded(any(), any(), anyInt())).thenReturn(true);
+
+        assertThat(self[0].pollOnce()).isEqualTo(2);
+
+        verify(repository).extendLeases("w1", java.util.Map.of(first.id(), 1, second.id(), 1), Duration.ofSeconds(30));
+        assertThat(handled).containsExactly(first.id());
+        verify(repository, never()).markSucceeded(eq(second.id()), any(), anyInt());
+        verify(repository, never()).markFailed(eq(second.id()), any(), anyInt(), any(), any());
+        assertThat(self[0].heldClaims()).isEmpty();
+    }
+
+    @Test
+    void heartbeatWithNothingHeldDoesNotTouchTheDatabase() {
+        worker(10, recording("email")).heartbeat();
+        verify(repository, never()).extendLeases(any(), any(), any());
+    }
+
+    @Test
     void lostOwnershipOnCompletionIsTolerated() {
         Job job = running("email", 1);
         Worker worker = worker(10, recording("email"));

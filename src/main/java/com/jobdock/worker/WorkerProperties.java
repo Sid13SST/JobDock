@@ -11,7 +11,8 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param batchSize max jobs claimed per poll
  * @param idleDelay sleep between polls when nothing was claimed (or a poll failed)
  * @param shutdownTimeout how long stop() waits for in-flight jobs before interrupting threads
- * @param leaseDuration how long a claim is valid without a heartbeat (visibility timeout)
+ * @param leaseDuration how long a claim is valid without a heartbeat (visibility timeout); held
+ *     claims are heartbeated every {@code leaseDuration / 3}
  */
 @ConfigurationProperties("jobdock.worker")
 public record WorkerProperties(
@@ -38,8 +39,8 @@ public record WorkerProperties(
         if (batchSize < 1) {
             throw new IllegalArgumentException("jobdock.worker.batch-size must be >= 1");
         }
-        if (leaseDuration.isNegative() || leaseDuration.isZero()) {
-            throw new IllegalArgumentException("jobdock.worker.lease-duration must be positive");
+        if (leaseDuration.toMillis() < 3) {
+            throw new IllegalArgumentException("jobdock.worker.lease-duration must be at least 3ms");
         }
         this.enabled = enabled;
         this.threads = threads;
@@ -52,6 +53,10 @@ public record WorkerProperties(
     /** With the default lease (convenient for tests). */
     public WorkerProperties(boolean enabled, int threads, int batchSize, Duration idleDelay, Duration shutdownTimeout) {
         this(enabled, threads, batchSize, idleDelay, shutdownTimeout, DEFAULT_LEASE);
+    }
+
+    public Duration heartbeatInterval() {
+        return leaseDuration.dividedBy(3);
     }
 
     public WorkerProperties withLease(Duration lease) {

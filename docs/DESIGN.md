@@ -139,17 +139,30 @@ On shutdown it stops claiming and waits up to `shutdown-timeout` for in-flight
 jobs. Correctness does not depend on the pool: two threads or two processes are
 kept apart by the claim statement alone.
 
-## 5. Lease and heartbeat [planned]
+## 5. Lease and heartbeat
 
-- Claim sets `locked_until = now() + lease_duration`.
-- While the handler runs, the worker heartbeats every `lease_duration / 3`:
-  `UPDATE jobs SET locked_until = now() + :lease WHERE id=:id AND locked_by=:worker AND status='RUNNING'`.
-  0 rows -> lease lost; the worker should stop treating the job as its own.
-- A reaper (any worker, periodically) requeues expired leases:
-  `status='RUNNING' AND locked_until < now()` -> `FAILED_RETRY` (or `DEAD` if out of attempts),
-  using `FOR UPDATE SKIP LOCKED` so reapers don't contend.
-- Completion is guarded by `locked_by`, so a worker that was presumed dead and
-  comes back late cannot overwrite the state set after its lease was reclaimed.
+**Lease [B3].** The claim sets `locked_until = now() + lease` (`jobdock.worker.lease-duration`,
+default 30s; database clock). A `RUNNING` job always has a lease (CHECK constraint).
+
+**Heartbeat [B3].** Each worker tracks the claims it holds and has not finished —
+the running job *and* the not-yet-started rest of its claimed batch — as
+`job id -> attempt`. One heartbeat thread per `WorkerPool` runs every
+`lease / 3` and, per worker, extends all of them in one statement:
+
+```sql
+UPDATE jobs j SET locked_until = now() + :lease
+FROM unnest(:ids, :attempts) AS c(id, attempt)
+WHERE j.id = c.id AND j.attempts = c.attempt AND j.status = 'RUNNING' AND j.locked_by = :worker
+RETURNING j.id
+```
+
+A held claim that is not returned is **lost** (it was reclaimed). If that job has
+not started yet, the worker skips it. If it is already running, the handler is
+*not* interrupted; it runs to the end and its result is rejected by fencing
+(section 4). Heartbeat errors are logged; the leases then simply expire.
+During graceful shutdown heartbeats continue until in-flight jobs finish.
+
+**Reaper** [planned, 3.4]: see section 5a.
 
 ## 6. Retry and backoff [B2]
 

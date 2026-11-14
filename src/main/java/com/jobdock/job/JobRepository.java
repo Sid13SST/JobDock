@@ -11,7 +11,9 @@ import java.time.OffsetDateTime;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -171,6 +173,41 @@ public class JobRepository {
                 .param("attempt", attempt)
                 .query((rs, n) -> new FailureOutcome(JobStatus.valueOf(rs.getString("status")), instant(rs, "run_at")))
                 .optional();
+    }
+
+    /**
+     * Heartbeat: extends {@code locked_until = now() + lease} for the given claims of
+     * {@code workerId}, each identified by job id and attempt. Fenced like the result updates, so a
+     * claim that was reclaimed is not extended.
+     *
+     * @param claims job id -> attempt of the claim
+     * @return the ids whose lease was extended; any other id in {@code claims} is no longer ours
+     */
+    public Set<UUID> extendLeases(String workerId, Map<UUID, Integer> claims, Duration lease) {
+        if (claims.isEmpty()) {
+            return Set.of();
+        }
+        UUID[] ids = new UUID[claims.size()];
+        Integer[] attempts = new Integer[claims.size()];
+        int i = 0;
+        for (Map.Entry<UUID, Integer> claim : claims.entrySet()) {
+            ids[i] = claim.getKey();
+            attempts[i] = claim.getValue();
+            i++;
+        }
+        return Set.copyOf(jdbc.sql("""
+                        UPDATE jobs j
+                        SET locked_until = now() + :leaseMillis * interval '1 millisecond'
+                        FROM unnest(CAST(:ids AS uuid[]), CAST(:attempts AS int[])) AS c(id, attempt)
+                        WHERE j.id = c.id AND j.attempts = c.attempt
+                          AND j.status = 'RUNNING' AND j.locked_by = :worker
+                        RETURNING j.id""")
+                .param("leaseMillis", lease.toMillis())
+                .param("ids", ids)
+                .param("attempts", attempts)
+                .param("worker", workerId)
+                .query(UUID.class)
+                .list());
     }
 
     private static String truncate(String error) {

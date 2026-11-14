@@ -6,13 +6,18 @@ import com.jobdock.job.JobRepository;
 import com.jobdock.job.JobStatus;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * One claim-execute-complete loop iteration. Not thread-safe; each thread owns its Worker and
- * a unique worker id. Handlers run with no database transaction open.
+ * One claim-execute-complete loop iteration. {@link #pollOnce()} is called by one thread only
+ * (each thread owns its Worker and a unique worker id); {@link #heartbeat()} may be called
+ * concurrently from a heartbeat thread. Handlers run with no database transaction open.
  */
 public class Worker {
 
@@ -24,6 +29,10 @@ public class Worker {
     private final BackoffPolicy backoff;
     private final int batchSize;
     private final Duration lease;
+    /** Claims this worker holds and has not finished: job id -> attempt. Heartbeats cover all of them. */
+    private final Map<UUID, Integer> held = new ConcurrentHashMap<>();
+    /** Held claims the heartbeat found were taken away (lease expired and reclaimed or reaped). */
+    private final Set<UUID> lost = ConcurrentHashMap.newKeySet();
 
     public Worker(String id, JobRepository repository, HandlerRegistry handlers, BackoffPolicy backoff,
             int batchSize, Duration lease) {
@@ -46,10 +55,50 @@ public class Worker {
      */
     public int pollOnce() {
         List<Job> claimed = repository.claim(id, handlers.types(), batchSize, lease);
-        for (Job job : claimed) {
-            execute(job);
+        claimed.forEach(job -> held.put(job.id(), job.attempts()));
+        try {
+            for (Job job : claimed) {
+                if (lost.remove(job.id())) {
+                    log.warn("Lease on job {} (attempt {}) was lost before it started; skipping it", job.id(),
+                            job.attempts());
+                    held.remove(job.id());
+                    continue;
+                }
+                try {
+                    execute(job);
+                } finally {
+                    held.remove(job.id());
+                    lost.remove(job.id());
+                }
+            }
+        } finally {
+            claimed.forEach(job -> held.remove(job.id()));
         }
         return claimed.size();
+    }
+
+    /**
+     * Extends the lease of every claim this worker holds. A claim that is no longer ours is
+     * marked lost: if its job has not started it will be skipped; if it is running, its result
+     * will be rejected by fencing when it finishes.
+     */
+    public void heartbeat() {
+        if (held.isEmpty()) {
+            return;
+        }
+        Map<UUID, Integer> snapshot = Map.copyOf(held);
+        Set<UUID> extended = repository.extendLeases(id, snapshot, lease);
+        snapshot.forEach((jobId, attempt) -> {
+            if (!extended.contains(jobId) && attempt.equals(held.get(jobId))) {
+                lost.add(jobId);
+                log.warn("Worker {} lost the lease on job {} (attempt {})", id, jobId, attempt);
+            }
+        });
+    }
+
+    /** Claims currently held (for tests and diagnostics). */
+    Map<UUID, Integer> heldClaims() {
+        return Map.copyOf(held);
     }
 
     private void execute(Job job) {

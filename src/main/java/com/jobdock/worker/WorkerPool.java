@@ -5,6 +5,8 @@ import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,6 +31,8 @@ public class WorkerPool implements SmartLifecycle {
     private final BackoffPolicy backoff;
     private final String instanceId;
     private final List<Thread> threads = new ArrayList<>();
+    private final List<Worker> workers = new ArrayList<>();
+    private ScheduledExecutorService heartbeats;
     private volatile boolean running;
 
     public WorkerPool(WorkerProperties props, JobRepository repository, HandlerRegistry handlers,
@@ -49,11 +53,27 @@ public class WorkerPool implements SmartLifecycle {
         running = true;
         for (int i = 0; i < props.threads(); i++) {
             Worker worker = new Worker(instanceId + "-" + i, repository, handlers, backoff, props.batchSize(), props.leaseDuration());
+            workers.add(worker);
             Thread t = new Thread(() -> loop(worker), threadNamePrefix() + i);
             threads.add(t);
-            t.start();
         }
-        log.info("Started {} worker threads (instance {}, types {})", props.threads(), instanceId, handlers.types());
+        long interval = props.heartbeatInterval().toMillis();
+        heartbeats = Executors.newSingleThreadScheduledExecutor(r -> new Thread(r, threadNamePrefix() + "heartbeat"));
+        heartbeats.scheduleWithFixedDelay(this::heartbeatAll, interval, interval, TimeUnit.MILLISECONDS);
+        threads.forEach(Thread::start);
+        log.info("Started {} worker threads (instance {}, types {}, lease {}, heartbeat every {})", props.threads(),
+                instanceId, handlers.types(), props.leaseDuration(), props.heartbeatInterval());
+    }
+
+    /** Runs on the heartbeat thread; must never throw, or the scheduler would stop running it. */
+    private void heartbeatAll() {
+        for (Worker worker : workers) {
+            try {
+                worker.heartbeat();
+            } catch (RuntimeException e) {
+                log.error("Heartbeat for worker {} failed; its leases may expire", worker.id(), e);
+            }
+        }
     }
 
     private void loop(Worker worker) {
@@ -102,6 +122,9 @@ public class WorkerPool implements SmartLifecycle {
             }
         }
         threads.clear();
+        // Heartbeats keep running while in-flight jobs finish above, then stop.
+        heartbeats.shutdownNow();
+        workers.clear();
         log.info("Worker pool stopped");
     }
 
