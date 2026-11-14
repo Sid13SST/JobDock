@@ -10,25 +10,32 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.jobdock.job.FailureOutcome;
 import com.jobdock.job.Job;
 import com.jobdock.job.JobRepository;
 import com.jobdock.job.JobStatus;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
-/** Worker control flow with a stubbed repository; real claim semantics are covered by ITs. */
+/** Worker control flow with a stubbed repository; real claim/transition semantics are covered by ITs. */
 class WorkerTest {
+
+    /** r = 0: delay(n) = 0.5 * 1s * 2^(n-1). */
+    private static final BackoffPolicy BACKOFF =
+            new BackoffPolicy(Duration.ofSeconds(1), Duration.ofMinutes(5), () -> 0.0);
 
     private final JobRepository repository = mock(JobRepository.class);
     private final List<UUID> handled = new ArrayList<>();
 
     @Test
     void claimsOnlyRegisteredTypesWithConfiguredBatchSize() {
-        Worker worker = new Worker("w1", repository, registry(recording("email")), 7);
+        Worker worker = worker(7, recording("email"));
         when(repository.claim(any(), any(), anyInt())).thenReturn(List.of());
 
         assertThat(worker.pollOnce()).isZero();
@@ -37,9 +44,9 @@ class WorkerTest {
 
     @Test
     void successfulJobsAreMarkedSucceeded() {
-        Job a = running("email");
-        Job b = running("email");
-        Worker worker = new Worker("w1", repository, registry(recording("email")), 10);
+        Job a = running("email", 1);
+        Job b = running("email", 1);
+        Worker worker = worker(10, recording("email"));
         when(repository.claim(any(), any(), anyInt())).thenReturn(List.of(a, b));
         when(repository.markSucceeded(any(), eq("w1"))).thenReturn(true);
 
@@ -48,42 +55,70 @@ class WorkerTest {
         assertThat(handled).containsExactly(a.id(), b.id());
         verify(repository).markSucceeded(a.id(), "w1");
         verify(repository).markSucceeded(b.id(), "w1");
+        verify(repository, never()).markFailed(any(), any(), any(), any());
     }
 
     @Test
-    void failingHandlerIsNotMarkedSucceededAndDoesNotStopTheBatch() {
-        Job bad = running("boom");
-        Job good = running("email");
-        JobHandler failing = new JobHandler() {
-            @Override
-            public String type() {
-                return "boom";
-            }
-
-            @Override
-            public void handle(Job job) {
-                throw new IllegalStateException("handler failed");
-            }
-        };
-        Worker worker = new Worker("w1", repository, registry(failing, recording("email")), 10);
+    void failingHandlerRecordsFailureWithBackoffForItsAttemptAndBatchContinues() {
+        Job bad = running("boom", 3);
+        Job good = running("email", 1);
+        Worker worker = worker(10, failing("boom", new IllegalStateException("disk full")), recording("email"));
         when(repository.claim(any(), any(), anyInt())).thenReturn(List.of(bad, good));
         when(repository.markSucceeded(any(), any())).thenReturn(true);
+        when(repository.markFailed(any(), any(), any(), any()))
+                .thenReturn(Optional.of(new FailureOutcome(JobStatus.FAILED_RETRY, Instant.now())));
 
         assertThat(worker.pollOnce()).isEqualTo(2);
 
+        // attempt 3 -> 0.5 * 1s * 2^2 = 2s
+        verify(repository).markFailed(bad.id(), "w1", "java.lang.IllegalStateException: disk full",
+                Duration.ofSeconds(2));
         verify(repository, never()).markSucceeded(eq(bad.id()), any());
         verify(repository).markSucceeded(good.id(), "w1");
     }
 
     @Test
+    void deadOutcomeAndLostOwnershipOnFailureAreTolerated() {
+        Job a = running("boom", 5);
+        Job b = running("boom", 1);
+        Worker worker = worker(10, failing("boom", new RuntimeException()));
+        when(repository.claim(any(), any(), anyInt())).thenReturn(List.of(a, b));
+        when(repository.markFailed(eq(a.id()), any(), any(), any()))
+                .thenReturn(Optional.of(new FailureOutcome(JobStatus.DEAD, Instant.now())));
+        when(repository.markFailed(eq(b.id()), any(), any(), any())).thenReturn(Optional.empty());
+
+        assertThat(worker.pollOnce()).isEqualTo(2);
+
+        verify(repository).markFailed(a.id(), "w1", "java.lang.RuntimeException", Duration.ofSeconds(8));
+        verify(repository).markFailed(b.id(), "w1", "java.lang.RuntimeException", Duration.ofMillis(500));
+    }
+
+    @Test
+    void jobWithoutHandlerIsRecordedAsFailedNotStranded() {
+        Job orphan = running("unknown", 1);
+        Worker worker = worker(10, recording("email"));
+        when(repository.claim(any(), any(), anyInt())).thenReturn(List.of(orphan));
+        when(repository.markFailed(any(), any(), any(), any())).thenReturn(Optional.empty());
+
+        worker.pollOnce();
+
+        verify(repository).markFailed(orphan.id(), "w1", "No handler registered for type 'unknown'",
+                Duration.ofMillis(500));
+    }
+
+    @Test
     void lostOwnershipOnCompletionIsTolerated() {
-        Job job = running("email");
-        Worker worker = new Worker("w1", repository, registry(recording("email")), 10);
+        Job job = running("email", 1);
+        Worker worker = worker(10, recording("email"));
         when(repository.claim(any(), any(), anyInt())).thenReturn(List.of(job));
         when(repository.markSucceeded(job.id(), "w1")).thenReturn(false);
 
         assertThat(worker.pollOnce()).isEqualTo(1);
         assertThat(handled).containsExactly(job.id());
+    }
+
+    private Worker worker(int batchSize, JobHandler... handlers) {
+        return new Worker("w1", repository, new HandlerRegistry(List.of(handlers)), BACKOFF, batchSize);
     }
 
     private JobHandler recording(String type) {
@@ -100,13 +135,23 @@ class WorkerTest {
         };
     }
 
-    private static HandlerRegistry registry(JobHandler... handlers) {
-        return new HandlerRegistry(List.of(handlers));
+    private static JobHandler failing(String type, RuntimeException e) {
+        return new JobHandler() {
+            @Override
+            public String type() {
+                return type;
+            }
+
+            @Override
+            public void handle(Job job) {
+                throw e;
+            }
+        };
     }
 
-    private static Job running(String type) {
+    private static Job running(String type, int attempts) {
         Instant now = Instant.now();
-        return new Job(UUID.randomUUID(), type, JsonNodeFactory.instance.objectNode(), JobStatus.RUNNING, 1, 5, null,
-                now, "w1", null, now, now, now, null);
+        return new Job(UUID.randomUUID(), type, JsonNodeFactory.instance.objectNode(), JobStatus.RUNNING, attempts,
+                5, null, now, "w1", null, now, now, now, null);
     }
 }

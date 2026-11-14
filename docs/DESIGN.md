@@ -22,8 +22,8 @@ Status markers: **[B1]** implemented in Batch 1, **[planned]** designed but not 
 | `QUEUED`       | Waiting to run; eligible once `run_at <= now()`.                 | [B1]       |
 | `RUNNING`      | Claimed by a worker (`locked_by`).                               | [B1]       |
 | `SUCCEEDED`    | Handler returned normally. Terminal.                             | [B1]       |
-| `FAILED_RETRY` | Last attempt failed; eligible again at `run_at` (backoff).       | [planned]  |
-| `DEAD`         | Failed `max_attempts` times. Terminal; kept for inspection.      | [planned]  |
+| `FAILED_RETRY` | Last attempt failed; eligible again at `run_at` (backoff).       | [B2]       |
+| `DEAD`         | Failed `max_attempts` times. Terminal; kept for inspection.      | [B2]       |
 
 Terminal states are never left automatically.
 
@@ -41,7 +41,7 @@ Batch 1 (`V1__create_jobs.sql`):
 | `idempotency_key` | `text` NULL   | UNIQUE; NULL means "no dedup"                       |
 | `run_at`          | `timestamptz` | not eligible before this time                       |
 | `locked_by`       | `text` NULL   | worker id that holds the job while `RUNNING`       |
-| `last_error`      | `text` NULL   | reserved for the failure path                       |
+| `last_error`      | `text` NULL   | most recent failure (class: message), max 4000 chars; kept on DEAD and on a later success |
 | `created_at`, `updated_at`, `started_at`, `finished_at` | `timestamptz` |              |
 
 Batch 2 (`V2__add_max_attempts.sql`):
@@ -138,18 +138,36 @@ kept apart by the claim statement alone.
 - Completion is guarded by `locked_by`, so a worker that was presumed dead and
   comes back late cannot overwrite the state set after its lease was reclaimed.
 
-## 6. Retry and backoff [planned]
+## 6. Retry and backoff [B2]
 
-On handler failure, with `n = attempts` (already incremented by the claim):
+On handler failure (an `Exception` thrown by `handle`), with `n = attempts`
+(already incremented by the claim):
 
 ```
-if n >= max_attempts: status = DEAD
+if n >= max_attempts: status = DEAD          (run_at unchanged, finished_at = now())
 else:                 status = FAILED_RETRY, run_at = now() + delay(n)
-delay(n) = min(base * 2^(n-1), max_delay) * jitter,   jitter uniform in [0.5, 1.0]
+delay(n) = min(base * 2^(n-1), max_delay) * (0.5 + 0.5 r),   r uniform in [0, 1)
 ```
 
-Defaults to be chosen when implemented (e.g. base 1s, max 5 min, max_attempts 5).
-Jitter avoids synchronized retry storms.
+- One `UPDATE ... WHERE id = :id AND status = 'RUNNING' AND locked_by = :worker`;
+  the DEAD-or-retry decision is made in SQL from the row's own `attempts` and
+  `max_attempts`, so it cannot race with another writer. 0 rows -> the worker no
+  longer owns the job; logged, nothing changed.
+- `run_at` uses the database clock (`now()`), like the claim's `run_at <= now()`
+  check, so app/DB clock skew cannot make a retry early or late. Only `delay(n)`
+  is computed in Java (`BackoffPolicy`, randomness injected for tests).
+- `owner` is released and `last_error` set in both cases.
+- Defaults: `jobdock.retry.base-delay` 1s, `jobdock.retry.max-delay` 5m,
+  `max_attempts` 5 per job (1..100, settable on enqueue). With these defaults a
+  job is attempted 5 times, with retries roughly 0.5–1s, 1–2s, 2–4s and 4–8s after
+  each failure (plus poll latency), then dead-lettered.
+- Jitter factor in [0.5, 1.0) spreads retries of jobs that failed together.
+- The claim picks `FAILED_RETRY` rows exactly like `QUEUED` rows once
+  `run_at <= now()`, with the same `SKIP LOCKED` protocol.
+- A job of an unregistered type cannot normally be claimed; if it ever is, it is
+  recorded as a failed attempt rather than stranded.
+- Not handled: a handler throwing an `Error` (e.g. `OutOfMemoryError`) is not
+  caught; the job stays `RUNNING` until lease recovery exists (Batch 3).
 
 ## 7. Delivery semantics (honest statement)
 
@@ -166,6 +184,9 @@ for side effects). What the queue does guarantee:
   while its claim is valid (tested: N workers x M jobs, each job executed once on
   the success path);
 - a committed enqueue is never lost (it is a durable Postgres row);
+- a failed attempt is retried with backoff until `max_attempts`, then kept as
+  `DEAD` with its `last_error` [B2] — a retry is a new attempt, so a handler that
+  failed *after* a side effect will repeat it;
 - a crashed worker's jobs are eventually retried [planned, lease recovery].
 
 "Exactly once" is not claimed.
@@ -180,8 +201,8 @@ for side effects). What the queue does guarantee:
 | 4 | Job scheduled in the future | Not claimed before `run_at` | [B1] tested |
 | 5 | Completion by a worker that doesn't own the job | 0 rows, not marked succeeded | [B1] tested |
 | 6 | API process crashes after enqueue commit | Job persists (Postgres durability) | by design |
-| 7 | Handler throws | Batch 1: logged, job left `RUNNING` (known gap, unit-tested that it is not marked succeeded). Planned: retry with backoff | [planned] |
-| 8 | Handler fails `max_attempts` times | `DEAD` | [planned] |
+| 7 | Handler throws | `FAILED_RETRY`, `run_at = now() + delay(attempts)`, `last_error` set; retried when due | [B2] tested |
+| 8 | Handler fails `max_attempts` times | `DEAD`, `last_error` of the last attempt kept, never claimed again | [B2] tested |
 | 9 | Worker process killed mid-job | Lease expires, job requeued, runs again | [planned] |
 | 10 | Worker stalls past lease, then completes | Completion rejected (not owner) | [planned] |
 | 11 | No handler registered for `type` | Not claimed; stays `QUEUED` | [B1] tested |

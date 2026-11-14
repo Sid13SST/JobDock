@@ -26,14 +26,17 @@ public class WorkerPool implements SmartLifecycle {
     private final WorkerProperties props;
     private final JobRepository repository;
     private final HandlerRegistry handlers;
+    private final BackoffPolicy backoff;
     private final String instanceId;
     private final List<Thread> threads = new ArrayList<>();
     private volatile boolean running;
 
-    public WorkerPool(WorkerProperties props, JobRepository repository, HandlerRegistry handlers) {
+    public WorkerPool(WorkerProperties props, JobRepository repository, HandlerRegistry handlers,
+            BackoffPolicy backoff) {
         this.props = props;
         this.repository = repository;
         this.handlers = handlers;
+        this.backoff = backoff;
         this.instanceId = hostname() + "-" + ProcessHandle.current().pid() + "-"
                 + UUID.randomUUID().toString().substring(0, 8);
     }
@@ -45,7 +48,7 @@ public class WorkerPool implements SmartLifecycle {
         }
         running = true;
         for (int i = 0; i < props.threads(); i++) {
-            Worker worker = new Worker(instanceId + "-" + i, repository, handlers, props.batchSize());
+            Worker worker = new Worker(instanceId + "-" + i, repository, handlers, backoff, props.batchSize());
             Thread t = new Thread(() -> loop(worker), threadNamePrefix() + i);
             threads.add(t);
             t.start();

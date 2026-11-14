@@ -40,7 +40,8 @@ class WorkerPoolIT extends PostgresIntegrationTest {
         }
         WorkerPool pool = new WorkerPool(
                 new WorkerProperties(true, 3, 5, Duration.ofMillis(50), Duration.ofSeconds(5)),
-                repository, new HandlerRegistry(List.of(handler)));
+                repository, new HandlerRegistry(List.of(handler)),
+                BackoffPolicy.withRandomJitter(Duration.ofMillis(10), Duration.ofMillis(100)));
 
         pool.start();
         try {

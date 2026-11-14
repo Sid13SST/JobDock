@@ -53,8 +53,17 @@ Worker threads claim due jobs of the registered types with
 job `SUCCEEDED`. Configuration (`jobdock.worker.*`): `enabled` (true),
 `threads` (4), `batch-size` (10), `idle-delay` (500ms), `shutdown-timeout` (30s).
 
-Not yet implemented: a handler that throws leaves its job `RUNNING`; retries,
-backoff, dead-lettering and lease-based crash recovery are the next batches.
+## Retries and dead-lettering
+
+If a handler throws, the job goes to `FAILED_RETRY` and becomes claimable again
+after `min(base * 2^(n-1), max) * jitter` (jitter in [0.5, 1.0), `n` = attempt
+number; `jobdock.retry.base-delay` 1s, `jobdock.retry.max-delay` 5m). After
+`maxAttempts` attempts (default 5) the job is `DEAD`; `lastError` holds the last
+failure. Retry times use the database clock. Details: docs/DESIGN.md section 6.
+
+Not yet implemented: lease/heartbeat and recovery of jobs whose worker crashed
+mid-run (Batch 3). Until then such jobs stay `RUNNING`, as do jobs whose handler
+throws an `Error` rather than an `Exception`.
 
 ## Delivery semantics
 At-least-once. Handlers must be idempotent. Exactly-once is not claimed.

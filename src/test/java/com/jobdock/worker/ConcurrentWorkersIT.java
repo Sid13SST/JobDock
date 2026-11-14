@@ -35,6 +35,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 class ConcurrentWorkersIT extends PostgresIntegrationTest {
 
     private static final Logger log = LoggerFactory.getLogger(ConcurrentWorkersIT.class);
+    private static final BackoffPolicy BACKOFF =
+            BackoffPolicy.withRandomJitter(Duration.ofMillis(10), Duration.ofMillis(100));
 
     @Autowired
     JobRepository repository;
@@ -59,7 +61,7 @@ class ConcurrentWorkersIT extends PostgresIntegrationTest {
         try {
             List<Future<Integer>> claimedPerWorker = new ArrayList<>();
             for (int w = 0; w < workers; w++) {
-                Worker worker = new Worker("worker-" + w, repository, registry, 10);
+                Worker worker = new Worker("worker-" + w, repository, registry, BACKOFF, 10);
                 claimedPerWorker.add(pool.submit(() -> {
                     start.await();
                     int total = 0;
@@ -91,8 +93,8 @@ class ConcurrentWorkersIT extends PostgresIntegrationTest {
         HandlerRegistry registry = new HandlerRegistry(List.of(countingHandler()));
         WorkerProperties props = new WorkerProperties(true, 4, 5, Duration.ofMillis(20), Duration.ofSeconds(10));
         // Two pools = two independent "processes" with distinct instance ids sharing one database.
-        WorkerPool poolA = new WorkerPool(props, repository, registry);
-        WorkerPool poolB = new WorkerPool(props, repository, registry);
+        WorkerPool poolA = new WorkerPool(props, repository, registry, BACKOFF);
+        WorkerPool poolB = new WorkerPool(props, repository, registry, BACKOFF);
         Set<UUID> enqueued = ConcurrentHashMap.newKeySet();
 
         poolA.start();

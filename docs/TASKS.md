@@ -18,7 +18,7 @@ Each task = one reviewable commit with its own tests. `./mvnw verify` must pass.
 - [x] 2.1 `BackoffPolicy`: exponential backoff with jitter, injected randomness + unit tests
 - [x] 2.2 Migration `V2`: `max_attempts` (default 5, optional per job via API) + tests
 - [x] 2.3 Repository: guarded failure transition (`FAILED_RETRY` with backoff, or `DEAD` keeping `last_error`); claim also picks due `FAILED_RETRY` rows + ITs
-- [ ] 2.4 Worker failure path wired to the repository + unit tests + retry-then-dead IT
+- [x] 2.4 Worker failure path wired to the repository + unit tests + retry-then-dead IT
 - [ ] 2.5 Concurrency IT: retrying jobs are held by exactly one worker at a time; mutation checks
 
 ## Batch 3 — leases and crash recovery (planned)
