@@ -84,7 +84,7 @@ RETURNING ...
 ```sql
 WITH next AS (
   SELECT id FROM jobs
-  WHERE status = 'QUEUED' AND run_at <= now() AND type = ANY(:handled_types)
+  WHERE status IN ('QUEUED', 'FAILED_RETRY') AND run_at <= now() AND type = ANY(:handled_types)
   ORDER BY run_at, created_at
   LIMIT :batch
   FOR UPDATE SKIP LOCKED

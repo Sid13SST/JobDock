@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.Arrays;
@@ -76,8 +77,11 @@ public class JobRepository {
                 .optional();
     }
 
+    /** Longer error texts are truncated before being stored in {@code last_error}. */
+    public static final int MAX_ERROR_LENGTH = 4000;
+
     /**
-     * Atomically claims up to {@code limit} due QUEUED jobs of the given {@code types} for
+     * Atomically claims up to {@code limit} due QUEUED or FAILED_RETRY jobs of the given {@code types} for
      * {@code workerId}: sets them RUNNING, records the owner and increments {@code attempts}.
      * Rows locked by a concurrent claimer are skipped, not waited on. The locking CTE is
      * evaluated exactly once. Jobs of other types are left untouched.
@@ -92,7 +96,7 @@ public class JobRepository {
         return jdbc.sql("""
                         WITH next AS (
                             SELECT id FROM jobs
-                            WHERE status = 'QUEUED' AND run_at <= now() AND type = ANY(:types)
+                            WHERE status IN ('QUEUED', 'FAILED_RETRY') AND run_at <= now() AND type = ANY(:types)
                             ORDER BY run_at, created_at
                             LIMIT :limit
                             FOR UPDATE SKIP LOCKED
@@ -123,6 +127,44 @@ public class JobRepository {
                 .params(id, workerId)
                 .update();
         return updated == 1;
+    }
+
+    /**
+     * Records a failed attempt of a RUNNING job owned by {@code workerId}, in one statement:
+     * if the job has used all its attempts ({@code attempts >= max_attempts}) it becomes DEAD,
+     * otherwise FAILED_RETRY with {@code run_at = now() + retryDelay} (database clock). The owner
+     * is released and {@code error} stored in {@code last_error} in both cases.
+     *
+     * @return empty if the job is not RUNNING or not owned by this worker (nothing changed)
+     */
+    public Optional<FailureOutcome> markFailed(UUID id, String workerId, String error, Duration retryDelay) {
+        if (retryDelay.isNegative()) {
+            throw new IllegalArgumentException("retryDelay must not be negative");
+        }
+        return jdbc.sql("""
+                        UPDATE jobs
+                        SET status      = CASE WHEN attempts >= max_attempts THEN 'DEAD' ELSE 'FAILED_RETRY' END,
+                            run_at      = CASE WHEN attempts >= max_attempts THEN run_at
+                                               ELSE now() + :delayMillis * interval '1 millisecond' END,
+                            finished_at = CASE WHEN attempts >= max_attempts THEN now() END,
+                            locked_by   = NULL,
+                            last_error  = :error,
+                            updated_at  = now()
+                        WHERE id = :id AND status = 'RUNNING' AND locked_by = :worker
+                        RETURNING status, run_at""")
+                .param("delayMillis", retryDelay.toMillis())
+                .param("error", truncate(error))
+                .param("id", id)
+                .param("worker", workerId)
+                .query((rs, n) -> new FailureOutcome(JobStatus.valueOf(rs.getString("status")), instant(rs, "run_at")))
+                .optional();
+    }
+
+    private static String truncate(String error) {
+        if (error == null || error.length() <= MAX_ERROR_LENGTH) {
+            return error;
+        }
+        return error.substring(0, MAX_ERROR_LENGTH);
     }
 
     private String toJson(NewJob job) {
