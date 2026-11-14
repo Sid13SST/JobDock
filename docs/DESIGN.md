@@ -269,7 +269,10 @@ for side effects). What the queue does guarantee:
 | 7 | Handler throws | `FAILED_RETRY`, `run_at = now() + delay(attempts)`, `last_error` set; retried when due | [B2] tested |
 | 8 | Handler fails `max_attempts` times | `DEAD`, `last_error` of the last attempt kept, never claimed again | [B2] tested |
 | 8a | Retrying jobs under contention | A job in retry is held by at most one worker at a time; each attempt number runs once | [B2] tested: 2 pools x 4 threads, 300 jobs failing twice then succeeding + 100 jobs dead after 3 attempts |
-| 9 | Worker process killed mid-job | Lease expires, job requeued, runs again | [planned] |
-| 10 | Worker stalls past lease, then completes | Completion rejected (not owner) | [planned] |
+| 9 | Worker process killed mid-job | Heartbeats stop, lease expires, reaper requeues, another worker runs it again | [B3] tested: separate JVM killed with `kill -9` (CrashRecoveryIT) |
+| 10 | Worker stalls past lease, then completes or fails | Result rejected by (owner, attempt) fencing; new owner's claim/result stands | [B3] tested (ZombieWorkerIT, FencingIT) |
+| 10a | Long job, longer than several lease periods | Heartbeat keeps the lease; reaper leaves it alone; runs once | [B3] tested (HeartbeatIT) |
+| 10b | Several reapers at once | Each expired job requeued once | [B3] tested: 8 reapers x 300 expired jobs |
+| 10c | Writing a result fails | Rest of the batch continues; that job recovered via lease expiry | [B3] tested (ResultWriteFailureIT) |
 | 11 | No handler registered for `type` | Not claimed; stays `QUEUED` | [B1] tested |
-| 12 | Database unavailable | Poll loop logs and backs off; no state lost | [planned] |
+| 12 | Database unavailable | Poll loop logs and backs off; leases of held jobs may expire and are recovered later | [B3] partly: result-write failure tested; a full DB outage is not tested |
