@@ -18,13 +18,18 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 
-/** The pool's heartbeat thread keeps a long-running job's lease alive, against real Postgres. */
+/**
+ * The pool's heartbeat thread keeps a long-running job's lease alive while the pool's own reaper
+ * runs every 50ms, against real Postgres: the job must not be reaped or run twice.
+ */
 class HeartbeatIT extends PostgresIntegrationTest {
 
     private static final Duration LEASE = Duration.ofSeconds(1);
 
     @Autowired
     JobRepository repository;
+
+    private final java.util.concurrent.atomic.AtomicInteger executions = new java.util.concurrent.atomic.AtomicInteger();
 
     @Test
     void heartbeatKeepsLeaseAliveForAJobRunningLongerThanSeveralLeasePeriods() throws Exception {
@@ -38,6 +43,7 @@ class HeartbeatIT extends PostgresIntegrationTest {
 
             @Override
             public void handle(Job job) throws InterruptedException {
+                executions.incrementAndGet();
                 started.countDown();
                 release.await(60, TimeUnit.SECONDS);
             }
@@ -45,7 +51,8 @@ class HeartbeatIT extends PostgresIntegrationTest {
         UUID id = repository.insertIfAbsent(UUID.randomUUID(),
                 new NewJob("slow", JsonNodeFactory.instance.objectNode(), null, null)).orElseThrow().id();
         WorkerPool pool = new WorkerPool(
-                new WorkerProperties(true, 1, 1, Duration.ofMillis(20), Duration.ofSeconds(5)).withLease(LEASE),
+                new WorkerProperties(true, 1, 1, Duration.ofMillis(20), Duration.ofSeconds(5)).withLease(LEASE)
+                        .withReaperInterval(Duration.ofMillis(50)),
                 repository, new HandlerRegistry(List.of(slow)),
                 BackoffPolicy.withRandomJitter(Duration.ofSeconds(1), Duration.ofSeconds(1)));
 
@@ -70,7 +77,10 @@ class HeartbeatIT extends PostgresIntegrationTest {
             release.countDown();
             pool.stop();
         }
-        assertThat(repository.findById(id).orElseThrow().attempts()).isEqualTo(1);
+        Job done = repository.findById(id).orElseThrow();
+        assertThat(done.attempts()).as("never reclaimed").isEqualTo(1);
+        assertThat(done.lastError()).as("never reaped").isNull();
+        assertThat(executions.get()).isEqualTo(1);
     }
 
     private Instant dbNow() {

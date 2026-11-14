@@ -15,9 +15,10 @@ import org.springframework.context.SmartLifecycle;
 import org.springframework.stereotype.Component;
 
 /**
- * Runs {@code threads} independent poll loops. Each thread has its own worker id, so the
+ * Runs {@code threads} independent poll loops, one heartbeat thread (extends the leases of all
+ * held claims) and one lease-reaper thread. Each poll thread has its own worker id, so the
  * database (not this class) is what keeps two threads — or two processes — from taking the
- * same job.
+ * same job, and what keeps concurrent reapers in different processes from double-requeuing.
  */
 @Component
 @ConditionalOnProperty(name = "jobdock.worker.enabled", havingValue = "true", matchIfMissing = true)
@@ -32,7 +33,9 @@ public class WorkerPool implements SmartLifecycle {
     private final String instanceId;
     private final List<Thread> threads = new ArrayList<>();
     private final List<Worker> workers = new ArrayList<>();
+    private final LeaseReaper reaper;
     private ScheduledExecutorService heartbeats;
+    private ScheduledExecutorService reaperExecutor;
     private volatile boolean running;
 
     public WorkerPool(WorkerProperties props, JobRepository repository, HandlerRegistry handlers,
@@ -41,6 +44,7 @@ public class WorkerPool implements SmartLifecycle {
         this.repository = repository;
         this.handlers = handlers;
         this.backoff = backoff;
+        this.reaper = new LeaseReaper(repository);
         this.instanceId = hostname() + "-" + ProcessHandle.current().pid() + "-"
                 + UUID.randomUUID().toString().substring(0, 8);
     }
@@ -60,9 +64,22 @@ public class WorkerPool implements SmartLifecycle {
         long interval = props.heartbeatInterval().toMillis();
         heartbeats = Executors.newSingleThreadScheduledExecutor(r -> new Thread(r, threadNamePrefix() + "heartbeat"));
         heartbeats.scheduleWithFixedDelay(this::heartbeatAll, interval, interval, TimeUnit.MILLISECONDS);
+        // Separate thread, so a slow reap never delays heartbeats.
+        long reapEvery = props.reaperInterval().toMillis();
+        reaperExecutor = Executors.newSingleThreadScheduledExecutor(r -> new Thread(r, threadNamePrefix() + "reaper"));
+        reaperExecutor.scheduleWithFixedDelay(this::reap, reapEvery, reapEvery, TimeUnit.MILLISECONDS);
         threads.forEach(Thread::start);
         log.info("Started {} worker threads (instance {}, types {}, lease {}, heartbeat every {})", props.threads(),
                 instanceId, handlers.types(), props.leaseDuration(), props.heartbeatInterval());
+    }
+
+    /** Runs on the reaper thread; must never throw, or the scheduler would stop running it. */
+    private void reap() {
+        try {
+            reaper.reapOnce();
+        } catch (RuntimeException e) {
+            log.error("Lease reaper run failed; will retry in {}", props.reaperInterval(), e);
+        }
     }
 
     /** Runs on the heartbeat thread; must never throw, or the scheduler would stop running it. */
@@ -124,6 +141,7 @@ public class WorkerPool implements SmartLifecycle {
         threads.clear();
         // Heartbeats keep running while in-flight jobs finish above, then stop.
         heartbeats.shutdownNow();
+        reaperExecutor.shutdownNow();
         workers.clear();
         log.info("Worker pool stopped");
     }

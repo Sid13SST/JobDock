@@ -210,6 +210,45 @@ public class JobRepository {
                 .list());
     }
 
+    /**
+     * Reaper: takes back up to {@code limit} RUNNING jobs whose lease expired (their worker
+     * stopped heartbeating, e.g. it crashed). A job with attempts left becomes FAILED_RETRY and is
+     * due immediately; one that used all its attempts becomes DEAD. The abandoned attempt counts.
+     *
+     * <p>Safe to run concurrently on many instances: rows are locked with {@code FOR UPDATE SKIP
+     * LOCKED}, and a row another reaper (or a heartbeat, or a completion) changed first no longer
+     * matches {@code status = 'RUNNING' AND locked_until < now()} when re-checked under the lock.
+     */
+    public List<ReapedJob> reapExpiredLeases(int limit) {
+        if (limit <= 0) {
+            throw new IllegalArgumentException("limit must be positive");
+        }
+        return jdbc.sql("""
+                        WITH expired AS (
+                            SELECT id, locked_by FROM jobs
+                            WHERE status = 'RUNNING' AND locked_until < now()
+                            ORDER BY locked_until
+                            LIMIT :limit
+                            FOR UPDATE SKIP LOCKED
+                        )
+                        UPDATE jobs j
+                        SET status       = CASE WHEN j.attempts >= j.max_attempts THEN 'DEAD' ELSE 'FAILED_RETRY' END,
+                            run_at       = CASE WHEN j.attempts >= j.max_attempts THEN j.run_at ELSE now() END,
+                            finished_at  = CASE WHEN j.attempts >= j.max_attempts THEN now() END,
+                            last_error   = 'Lease expired: worker ' || expired.locked_by
+                                           || ' stopped heartbeating during attempt ' || j.attempts,
+                            locked_by    = NULL,
+                            locked_until = NULL,
+                            updated_at   = now()
+                        FROM expired
+                        WHERE j.id = expired.id
+                        RETURNING j.id, j.status, expired.locked_by AS previous_owner, j.attempts""")
+                .param("limit", limit)
+                .query((rs, n) -> new ReapedJob(rs.getObject("id", UUID.class), JobStatus.valueOf(rs.getString("status")),
+                        rs.getString("previous_owner"), rs.getInt("attempts")))
+                .list();
+    }
+
     private static String truncate(String error) {
         if (error == null || error.length() <= MAX_ERROR_LENGTH) {
             return error;

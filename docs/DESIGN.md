@@ -162,7 +162,39 @@ not started yet, the worker skips it. If it is already running, the handler is
 (section 4). Heartbeat errors are logged; the leases then simply expire.
 During graceful shutdown heartbeats continue until in-flight jobs finish.
 
-**Reaper** [planned, 3.4]: see section 5a.
+## 5a. Lease reaper [B3]
+
+Every `WorkerPool` runs a reaper thread every `jobdock.worker.reaper-interval`
+(default 5s). It takes back `RUNNING` jobs whose lease expired, in batches of 100:
+
+```sql
+WITH expired AS (
+  SELECT id, locked_by FROM jobs
+  WHERE status = 'RUNNING' AND locked_until < now()
+  ORDER BY locked_until LIMIT :limit
+  FOR UPDATE SKIP LOCKED
+)
+UPDATE jobs j SET
+  status      = CASE WHEN j.attempts >= j.max_attempts THEN 'DEAD' ELSE 'FAILED_RETRY' END,
+  run_at      = CASE WHEN j.attempts >= j.max_attempts THEN j.run_at ELSE now() END,
+  finished_at = CASE WHEN j.attempts >= j.max_attempts THEN now() END,
+  last_error  = 'Lease expired: worker <id> stopped heartbeating during attempt <n>',
+  locked_by = NULL, locked_until = NULL, updated_at = now()
+FROM expired WHERE j.id = expired.id
+```
+
+- **Concurrent reapers** (several instances): `SKIP LOCKED` skips rows another
+  reaper holds; a row changed and committed by another reaper, heartbeat or
+  completion before we lock it is re-checked under the lock and no longer
+  matches. Each expired job is requeued once (tested with 8 concurrent reapers).
+- **Reaper vs. late completion / heartbeat:** both are single-row `UPDATE`s on the
+  same row; whichever commits first wins and the other matches 0 rows (fencing).
+- The abandoned attempt counts toward `max_attempts`, so a job that crashes its
+  worker every time ("poison pill") ends `DEAD` instead of looping forever.
+- A reaped job is due immediately (no backoff): the usual cause is a dead worker,
+  not the job. Trade-off: a poison pill is retried quickly, up to `max_attempts`.
+- A lease can only expire if heartbeats stop for a whole lease period: worker
+  process dead, heartbeat thread starved, or the worker cut off from the database.
 
 ## 6. Retry and backoff [B2]
 

@@ -13,6 +13,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param shutdownTimeout how long stop() waits for in-flight jobs before interrupting threads
  * @param leaseDuration how long a claim is valid without a heartbeat (visibility timeout); held
  *     claims are heartbeated every {@code leaseDuration / 3}
+ * @param reaperInterval how often this process looks for expired leases to recover
  */
 @ConfigurationProperties("jobdock.worker")
 public record WorkerProperties(
@@ -21,7 +22,8 @@ public record WorkerProperties(
         int batchSize,
         Duration idleDelay,
         Duration shutdownTimeout,
-        Duration leaseDuration) {
+        Duration leaseDuration,
+        Duration reaperInterval) {
 
     public static final Duration DEFAULT_LEASE = Duration.ofSeconds(30);
 
@@ -32,7 +34,8 @@ public record WorkerProperties(
             @DefaultValue("10") int batchSize,
             @DefaultValue("500ms") Duration idleDelay,
             @DefaultValue("30s") Duration shutdownTimeout,
-            @DefaultValue("30s") Duration leaseDuration) {
+            @DefaultValue("30s") Duration leaseDuration,
+            @DefaultValue("5s") Duration reaperInterval) {
         if (threads < 1) {
             throw new IllegalArgumentException("jobdock.worker.threads must be >= 1");
         }
@@ -47,12 +50,16 @@ public record WorkerProperties(
         this.batchSize = batchSize;
         this.idleDelay = idleDelay;
         this.shutdownTimeout = shutdownTimeout;
+        if (reaperInterval.toMillis() < 1) {
+            throw new IllegalArgumentException("jobdock.worker.reaper-interval must be at least 1ms");
+        }
         this.leaseDuration = leaseDuration;
+        this.reaperInterval = reaperInterval;
     }
 
     /** With the default lease (convenient for tests). */
     public WorkerProperties(boolean enabled, int threads, int batchSize, Duration idleDelay, Duration shutdownTimeout) {
-        this(enabled, threads, batchSize, idleDelay, shutdownTimeout, DEFAULT_LEASE);
+        this(enabled, threads, batchSize, idleDelay, shutdownTimeout, DEFAULT_LEASE, Duration.ofSeconds(5));
     }
 
     public Duration heartbeatInterval() {
@@ -60,6 +67,10 @@ public record WorkerProperties(
     }
 
     public WorkerProperties withLease(Duration lease) {
-        return new WorkerProperties(enabled, threads, batchSize, idleDelay, shutdownTimeout, lease);
+        return new WorkerProperties(enabled, threads, batchSize, idleDelay, shutdownTimeout, lease, reaperInterval);
+    }
+
+    public WorkerProperties withReaperInterval(Duration interval) {
+        return new WorkerProperties(enabled, threads, batchSize, idleDelay, shutdownTimeout, leaseDuration, interval);
     }
 }
