@@ -11,7 +11,7 @@ Each task = one reviewable commit with its own tests. `./mvnw verify` must pass.
 - [x] 1.3 `JobRepository`: insert with idempotency key, find, claim (SKIP LOCKED), mark succeeded + ITs
 - [x] 1.4 Enqueue REST API (`POST /jobs`, `GET /jobs/{id}`, `Idempotency-Key`) + unit and ITs
 - [x] 1.5 Worker: handler registry, claim loop, success path, worker pool lifecycle + unit tests
-- [ ] 1.6 Concurrency IT: N workers x M jobs, each executed exactly once on the success path, none lost
+- [x] 1.6 Concurrency IT: N workers x M jobs, each executed exactly once on the success path, none lost
 - [ ] 1.7 GitHub Actions CI running `./mvnw verify`
 
 ## Batch 2 — failure handling (planned)

@@ -167,7 +167,7 @@ for side effects). What the queue does guarantee:
 
 | # | Scenario | Expected behaviour | Status |
 |---|----------|--------------------|--------|
-| 1 | Two workers poll at the same time | Disjoint sets of jobs (SKIP LOCKED) | [B1] tested |
+| 1 | Many workers poll at the same time | Disjoint sets of jobs (SKIP LOCKED); each job's handler runs once on the success path | [B1] tested: 8 workers x 1000 jobs; 2 pools x 4 threads with 4 concurrent producers x 250 jobs |
 | 2 | Same idempotency key sent twice (sequential or concurrent) | One job; replay returns it | [B1] tested |
 | 3 | Same key, different body | 409, no new job | [B1] tested |
 | 4 | Job scheduled in the future | Not claimed before `run_at` | [B1] tested |
