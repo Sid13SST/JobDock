@@ -27,6 +27,17 @@ curl -i -X POST localhost:8080/jobs \
 
 Optional body field `runAt` (ISO-8601) delays the job. `GET /jobs/{id}` returns the job or `404`.
 
+## Workers
+
+Implement `com.jobdock.worker.JobHandler` as a Spring bean (one per job `type`).
+Worker threads claim due jobs of the registered types with
+`FOR UPDATE SKIP LOCKED`, run the handler outside any transaction, and mark the
+job `SUCCEEDED`. Configuration (`jobdock.worker.*`): `enabled` (true),
+`threads` (4), `batch-size` (10), `idle-delay` (500ms), `shutdown-timeout` (30s).
+
+Not yet implemented: a handler that throws leaves its job `RUNNING`; retries,
+backoff, dead-lettering and lease-based crash recovery are the next batches.
+
 ## Delivery semantics
 At-least-once. Handlers must be idempotent. Exactly-once is not claimed.
 

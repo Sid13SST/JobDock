@@ -77,7 +77,7 @@ RETURNING ...
 ```sql
 WITH next AS (
   SELECT id FROM jobs
-  WHERE status = 'QUEUED' AND run_at <= now()
+  WHERE status = 'QUEUED' AND run_at <= now() AND type = ANY(:handled_types)
   ORDER BY run_at, created_at
   LIMIT :batch
   FOR UPDATE SKIP LOCKED
@@ -94,6 +94,9 @@ RETURNING j.*;
   instead of blocking on them; each row is handed to at most one claimer.
 - The locking CTE is evaluated once (avoids the known pitfall where a
   `WHERE id = (SELECT ... LIMIT 1)` subquery can be re-evaluated).
+- A worker only claims types it has a registered handler for, so a job of an
+  unknown type stays `QUEUED` (visible, runnable once a handler is deployed)
+  instead of being claimed and stuck.
 - Ordering is best-effort FIFO by `run_at`; strict ordering is **not** guaranteed
   (skipped locked rows and parallel workers reorder completion).
 
@@ -108,6 +111,13 @@ WHERE id = :id AND status = 'RUNNING' AND locked_by = :worker
 recovery exists); it is logged and not treated as success.
 
 The handler runs between claim and completion with no transaction open.
+
+Worker process [B1]: `WorkerPool` starts `jobdock.worker.threads` threads, each a
+`Worker` with its own id (`<host>-<pid>-<random>-<n>`), polling with
+`batch-size` and sleeping `idle-delay` when nothing was claimed or a poll failed.
+On shutdown it stops claiming and waits up to `shutdown-timeout` for in-flight
+jobs. Correctness does not depend on the pool: two threads or two processes are
+kept apart by the claim statement alone.
 
 ## 5. Lease and heartbeat [planned]
 
@@ -163,9 +173,9 @@ for side effects). What the queue does guarantee:
 | 4 | Job scheduled in the future | Not claimed before `run_at` | [B1] tested |
 | 5 | Completion by a worker that doesn't own the job | 0 rows, not marked succeeded | [B1] tested |
 | 6 | API process crashes after enqueue commit | Job persists (Postgres durability) | by design |
-| 7 | Handler throws | Batch 1: logged, job left `RUNNING` (gap). Planned: retry with backoff | [planned] |
+| 7 | Handler throws | Batch 1: logged, job left `RUNNING` (known gap, unit-tested that it is not marked succeeded). Planned: retry with backoff | [planned] |
 | 8 | Handler fails `max_attempts` times | `DEAD` | [planned] |
 | 9 | Worker process killed mid-job | Lease expires, job requeued, runs again | [planned] |
 | 10 | Worker stalls past lease, then completes | Completion rejected (not owner) | [planned] |
-| 11 | No handler registered for `type` | Batch 1: logged, left `RUNNING`. Planned: fail -> `DEAD` | [planned] |
+| 11 | No handler registered for `type` | Not claimed; stays `QUEUED` | [B1] tested |
 | 12 | Database unavailable | Poll loop logs and backs off; no state lost | [planned] |

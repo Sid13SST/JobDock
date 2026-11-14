@@ -8,6 +8,7 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -74,18 +75,22 @@ public class JobRepository {
     }
 
     /**
-     * Atomically claims up to {@code limit} due QUEUED jobs for {@code workerId}: sets them
-     * RUNNING, records the owner and increments {@code attempts}. Rows locked by a concurrent
-     * claimer are skipped, not waited on. The locking CTE is evaluated exactly once.
+     * Atomically claims up to {@code limit} due QUEUED jobs of the given {@code types} for
+     * {@code workerId}: sets them RUNNING, records the owner and increments {@code attempts}.
+     * Rows locked by a concurrent claimer are skipped, not waited on. The locking CTE is
+     * evaluated exactly once. Jobs of other types are left untouched.
      */
-    public List<Job> claim(String workerId, int limit) {
+    public List<Job> claim(String workerId, Collection<String> types, int limit) {
         if (limit <= 0) {
             throw new IllegalArgumentException("limit must be positive");
+        }
+        if (types.isEmpty()) {
+            return List.of();
         }
         return jdbc.sql("""
                         WITH next AS (
                             SELECT id FROM jobs
-                            WHERE status = 'QUEUED' AND run_at <= now()
+                            WHERE status = 'QUEUED' AND run_at <= now() AND type = ANY(:types)
                             ORDER BY run_at, created_at
                             LIMIT :limit
                             FOR UPDATE SKIP LOCKED
@@ -98,6 +103,7 @@ public class JobRepository {
                         RETURNING\s""" + J_COLUMNS)
                 .param("limit", limit)
                 .param("worker", workerId)
+                .param("types", types.toArray(String[]::new))
                 .query(this::mapRow)
                 .list();
     }

@@ -3,27 +3,12 @@ package com.jobdock.job;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import com.jobdock.TestcontainersConfiguration;
+import com.jobdock.PostgresIntegrationTest;
 import java.util.UUID;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.jdbc.core.simple.JdbcClient;
 
-@SpringBootTest
-@Import(TestcontainersConfiguration.class)
-class MigrationIT {
-
-    @Autowired
-    JdbcClient jdbc;
-
-    @BeforeEach
-    void clean() {
-        jdbc.sql("TRUNCATE jobs").update();
-    }
+class MigrationIT extends PostgresIntegrationTest {
 
     @Test
     void v1IsApplied() {
@@ -66,7 +51,7 @@ class MigrationIT {
     void multipleJobsWithoutIdempotencyKeyAreAllowed() {
         insert(UUID.randomUUID(), "QUEUED", null, null);
         insert(UUID.randomUUID(), "QUEUED", null, null);
-        assertThat(jdbc.sql("SELECT count(*) FROM jobs").query(Long.class).single()).isEqualTo(2);
+        assertThat(countJobs()).isEqualTo(2);
     }
 
     private void insert(UUID id, String status, String lockedBy, String key) {

@@ -10,13 +10,13 @@ Each task = one reviewable commit with its own tests. `./mvnw verify` must pass.
 - [x] 1.2 Flyway migration `V1__create_jobs.sql` + migration IT
 - [x] 1.3 `JobRepository`: insert with idempotency key, find, claim (SKIP LOCKED), mark succeeded + ITs
 - [x] 1.4 Enqueue REST API (`POST /jobs`, `GET /jobs/{id}`, `Idempotency-Key`) + unit and ITs
-- [ ] 1.5 Worker: handler registry, claim loop, success path, worker pool lifecycle + unit tests
+- [x] 1.5 Worker: handler registry, claim loop, success path, worker pool lifecycle + unit tests
 - [ ] 1.6 Concurrency IT: N workers x M jobs, each executed exactly once on the success path, none lost
 - [ ] 1.7 GitHub Actions CI running `./mvnw verify`
 
 ## Batch 2 — failure handling (planned)
 - [ ] 2.1 Migration: `max_attempts`; handler failure -> `FAILED_RETRY` with exponential backoff + jitter
-- [ ] 2.2 `DEAD` after `max_attempts`; unknown job type -> `DEAD`
+- [ ] 2.2 `DEAD` after `max_attempts`
 - [ ] 2.3 Claim also picks `FAILED_RETRY` rows whose `run_at` has passed
 
 ## Batch 3 — leases and crash recovery (planned)
