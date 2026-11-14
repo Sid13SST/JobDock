@@ -10,7 +10,7 @@ Status markers: **[B1]** implemented in Batch 1, **[planned]** designed but not 
                v
    +------> QUEUED ----claim----> RUNNING ----success----> SUCCEEDED
    |                               |   |
-   |   (backoff elapsed)           |   +--lease expired (worker crashed)--> QUEUED / FAILED_RETRY
+   |   (backoff elapsed)           |   +--lease expired (reaper)--> FAILED_RETRY, or DEAD if out of attempts
    |                               |
    +--- FAILED_RETRY <--failure----+  (attempts < max_attempts)
                                    |
@@ -236,25 +236,52 @@ delay(n) = min(base * 2^(n-1), max_delay) * (0.5 + 0.5 r),   r uniform in [0, 1)
 
 ## 7. Delivery semantics (honest statement)
 
-**At-least-once.** A job is run at least once unless it is dead-lettered, and it
-may run more than once. Concretely, a handler can run again if:
-- the worker crashes after the handler's side effects but before the completion
-  `UPDATE` commits;
-- (once leases exist) a handler outlives its lease (e.g. a long GC pause or a
-  network partition from the DB) and the job is reclaimed.
+**At-least-once. Not exactly-once.** A job's handler runs at least once unless the
+job is dead-lettered, and it **can run more than once**. With leases in place
+(Batch 3) these are the ways a handler runs again:
 
-Therefore **handlers must be idempotent** (e.g. use the job id as a dedup key
-for side effects). What the queue does guarantee:
-- a job is never handed to two workers by the claim protocol at the same time
-  while its claim is valid (tested: N workers x M jobs, each job executed once on
-  the success path);
-- a committed enqueue is never lost (it is a durable Postgres row);
-- a failed attempt is retried with backoff until `max_attempts`, then kept as
-  `DEAD` with its `last_error` [B2] — a retry is a new attempt, so a handler that
-  failed *after* a side effect will repeat it;
-- a crashed worker's jobs are eventually retried [planned, lease recovery].
+1. **Worker dies after side effects, before the result commits** (crash, `kill -9`,
+   lost connection while writing the result). The lease expires, the reaper
+   requeues the job, another worker runs it. Tested: `CrashRecoveryIT`,
+   `ResultWriteFailureIT`.
+2. **Worker is alive but stops heartbeating for a whole lease period** (long GC
+   pause, CPU starvation, network partition from the database). The job is
+   reclaimed and runs elsewhere *while the first handler may still be running*:
+   two handlers can overlap in time. The queue does not stop the first handler;
+   fencing only guarantees its **result** is discarded. Tested: `ZombieWorkerIT`
+   (handler ran twice, only the current owner's result was kept).
+3. **Retry after a failure** that happened after a side effect: a retry is a new
+   attempt and repeats the side effect.
 
-"Exactly once" is not claimed.
+So **handlers must be idempotent** — e.g. use the job id as a deduplication key
+in the system they write to. The queue cannot make an external side effect
+atomic with its own `UPDATE`.
+
+What the queue does guarantee (all tested against real PostgreSQL):
+- A committed enqueue is never lost (durable row); an idempotency key creates at
+  most one job.
+- At any time at most one **current claim** exists per job (`SKIP LOCKED` claim,
+  `RUNNING` + owner + attempt). Each claim is a new attempt number.
+- Only the current claim can record a result or extend the lease: success,
+  failure and heartbeat are fenced by `(locked_by, attempts)`. A stale worker
+  cannot overwrite a newer result or resurrect a finished job.
+- A job held by a dead or cut-off worker is recovered once its lease expires
+  (lease default 30s + reaper interval default 5s + poll delay), and each expired
+  claim is requeued once even with many concurrent reapers.
+- Every attempt, including one abandoned by a crash, counts toward
+  `max_attempts`; a job that keeps failing or keeps crashing its worker ends
+  `DEAD` with `last_error` kept.
+- On the success path with no crashes, each job's handler runs exactly once
+  (tested: N workers x M jobs). This is an observed property of the normal case,
+  not an exactly-once guarantee.
+
+Limits of the lease mechanism (not solved here):
+- Correctness of lease expiry depends only on the **database clock** (`now()` in
+  claim, heartbeat and reaper), so app-server clock skew does not matter; a
+  worker that is *slower* than its lease is still the overlap case (2) above.
+- Choosing the lease is a trade-off: shorter = faster recovery after a crash,
+  more risk of reclaiming a merely slow worker (heartbeat every lease/3 must get
+  through at least once per lease period).
 
 ## 8. Failure scenarios
 

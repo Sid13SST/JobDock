@@ -34,7 +34,18 @@ backoff without cap / without jitter -> `BackoffPolicyTest`.
 - [x] 3.4 Reaper (safe with concurrent reapers): expired lease -> `FAILED_RETRY` / `DEAD`; zombie and concurrent-reaper ITs
 - [x] 3.5 Worker robustness: any `Throwable` from a handler is a failure; a failed result write does not strand the rest of the batch
 - [x] 3.6 Real crash test: worker in a separate JVM killed with `kill -9` mid-job, job recovered and completed by another worker
-- [ ] 3.7 Mutation checks; DESIGN.md delivery semantics updated for leases
+- [x] 3.7 Mutation checks; DESIGN.md delivery semantics updated for leases
+
+Batch 3 mutation checks (each change made, tests run, change reverted; all detected):
+results fenced by owner only, not attempt -> `FencingIT` (same worker id, stale attempt);
+results not fenced at all -> `FencingIT`, `ZombieWorkerIT`;
+heartbeat disabled -> `HeartbeatIT`, `CrashRecoveryIT`;
+heartbeat not fenced by attempt -> `LeaseIT`;
+reaper without `FOR UPDATE SKIP LOCKED` -> `LeaseReaperIT` (concurrent reapers double-requeue);
+reaper ignoring lease expiry -> `HeartbeatIT`, `LeaseReaperIT`;
+reaper never reaping -> `CrashRecoveryIT`;
+handler `Error`s not caught -> `WorkerTest`;
+result-write failure aborting the batch -> `WorkerTest`, `ResultWriteFailureIT`.
 
 ## Batch 4 — ops (planned)
 - [ ] 4.1 Metrics endpoint (counts per state, oldest queued age) via Actuator/Micrometer

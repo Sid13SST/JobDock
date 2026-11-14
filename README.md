@@ -74,7 +74,11 @@ worker whose lease expired cannot overwrite the new owner's result. Any
 docs/DESIGN.md sections 4, 5 and 5a.
 
 ## Delivery semantics
-At-least-once. Handlers must be idempotent. Exactly-once is not claimed.
+At-least-once, not exactly-once. A handler can run more than once: after a
+worker crash between the side effect and the result write, after a retry, or —
+if a live worker stops heartbeating for a whole lease period — on two workers
+overlapping in time (only the current claim's result is kept). Handlers must be
+idempotent. See docs/DESIGN.md section 7.
 
 ## Out of scope
 UI, auth, multi-tenancy, external brokers (Kafka/Redis), cloud deployment.
